@@ -10,9 +10,11 @@ import (
 	"testing"
 
 	"github.com/aga-coder/boticstudio/kernel/internal/auditor"
+	"github.com/aga-coder/boticstudio/kernel/internal/ausfuehrung"
 	"github.com/aga-coder/boticstudio/kernel/internal/beipackzettel"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
 	"github.com/aga-coder/boticstudio/kernel/internal/pfoertner"
+	"github.com/aga-coder/boticstudio/kernel/internal/tresor"
 )
 
 func testServer(t *testing.T) *httptest.Server {
@@ -35,7 +37,8 @@ func testServer(t *testing.T) *httptest.Server {
 			t.Fatal(err)
 		}
 	}
-	s := httptest.NewServer(Handler(p, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	f := &ausfuehrung.Ausfuehrer{Pfoertner: p, Katalog: k, Tresor: tresor.NeuSpeicher(), Audit: auditor.NeuSpeicher()}
+	s := httptest.NewServer(Handler(p, f, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(s.Close)
 	return s
 }
@@ -96,5 +99,24 @@ func TestKeinWegZumErlaubnisVergeben(t *testing.T) {
 		if res.StatusCode != http.StatusNotFound {
 			t.Errorf("%s antwortet %d", weg, res.StatusCode)
 		}
+	}
+}
+
+func TestAusfuehrenPrueftZuerst(t *testing.T) {
+	s := testServer(t)
+	// Ohne Erlaubnis für den Bereich: abgelehnt, nichts ausgeführt.
+	status, antwort := post(t, s.URL+"/v1/ausfuehren",
+		`{"anfrage":{"firma":"a","person":"anna","aufgabe":"t1","faehigkeit":"lesen","version":"1","bereich":"postfach/y"}}`)
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	if ent, _ := antwort["entscheidung"].(map[string]any); ent["ergebnis"] != "abgelehnt" || antwort["ergebnis"] != nil {
+		t.Fatalf("%v", antwort)
+	}
+	// Reservierte Eingabe: falsch gebaut.
+	status, _ = post(t, s.URL+"/v1/ausfuehren",
+		`{"anfrage":{"firma":"a","person":"anna","aufgabe":"t1","faehigkeit":"lesen","version":"1","bereich":"postfach/x"},"eingaben":{"zugang":"x"}}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("reservierte eingabe: status %d", status)
 	}
 }

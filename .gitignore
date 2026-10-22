@@ -1,3 +1,9 @@
 /kernel/pfoertner
 *.exe
 .env
+# Echte Test-Zugänge nur lokal, nie ins Repo
+tresor*.json
+!testdaten/tresor.beispiel.json
+__pycache__/
+.venv/
+.pytest_cache/

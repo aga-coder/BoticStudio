@@ -1,13 +1,19 @@
 {
-  "fassung": 1,
+  "fassung": 2,
   "name": "mail_lesen",
   "version": "1.0.0",
-  "beschreibung": "Holt neue Mails aus einem Postfach. Ändert dort nichts, die Mails bleiben ungelesen.",
-  "eingaben": ["postfach", "ordner", "seit"],
-  "ausgaben": ["mails"],
+  "beschreibung": "Holt die Mails der letzten Tage aus einem Postfach-Ordner (per IMAP). Ändert dort nichts, die Mails bleiben ungelesen.",
+  "eingaben": [
+    "seit_tagen",
+    "hoechstens"
+  ],
+  "ausgaben": [
+    "mails"
+  ],
   "recht": "mail.lesen",
   "bereich": "postfach/ordner",
   "risiko": "niedrig",
   "wirkt_nach_aussen": false,
-  "datenausgang": []
+  "datenausgang": [],
+  "zugang": "postfach"
 }

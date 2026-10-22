@@ -1,6 +1,6 @@
 // Package api macht den Pförtner über HTTP erreichbar.
 //
-// Stufe 1 bietet nur, was der Orchestrator braucht: prüfen und stoppen.
+// Angeboten wird nur, was der Orchestrator braucht: prüfen, ausführen und stoppen.
 // Erlaubnisse vergeben geht bewusst nicht über diesen Weg, damit der
 // Orchestrator sich nie selbst Rechte geben kann (Grundregel 1). Das kommt
 // mit der Oberfläche und einer eigenen Anmeldung der Aufrufer.
@@ -12,10 +12,11 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/aga-coder/boticstudio/kernel/internal/ausfuehrung"
 	"github.com/aga-coder/boticstudio/kernel/internal/pfoertner"
 )
 
-const maxGroesse = 64 << 10
+const maxGroesse = 1 << 20
 
 // Stoppauftrag hält eine Aufgabe an.
 type Stoppauftrag struct {
@@ -25,7 +26,7 @@ type Stoppauftrag struct {
 }
 
 // Handler liefert alle Wege des Pförtners.
-func Handler(p *pfoertner.Pfoertner, log *slog.Logger) http.Handler {
+func Handler(p *pfoertner.Pfoertner, f *ausfuehrung.Ausfuehrer, log *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /gesund", func(w http.ResponseWriter, _ *http.Request) {
@@ -42,6 +43,24 @@ func Handler(p *pfoertner.Pfoertner, log *slog.Logger) http.Handler {
 		log.Info("pruefung", "firma", a.Firma, "aufgabe", a.Aufgabe,
 			"faehigkeit", a.Faehigkeit, "ergebnis", ent.Ergebnis, "audit_nr", ent.AuditNr)
 		schreibeJSON(w, http.StatusOK, ent)
+	})
+
+	mux.HandleFunc("POST /v1/ausfuehren", func(w http.ResponseWriter, r *http.Request) {
+		var auftrag ausfuehrung.Auftrag
+		if err := lies(w, r, &auftrag); err != nil {
+			schreibeJSON(w, http.StatusBadRequest, map[string]string{"fehler": err.Error()})
+			return
+		}
+		antwort, err := f.Fuehre(r.Context(), auftrag)
+		if err != nil {
+			schreibeJSON(w, http.StatusBadRequest, map[string]string{"fehler": err.Error()})
+			return
+		}
+		// Eingaben und Ergebnis kommen nie ins Log, sie können Mailinhalte enthalten.
+		a := auftrag.Anfrage
+		log.Info("ausfuehrung", "firma", a.Firma, "aufgabe", a.Aufgabe, "faehigkeit", a.Faehigkeit,
+			"ergebnis", antwort.Entscheidung.Ergebnis, "fehler", antwort.Fehler != "")
+		schreibeJSON(w, http.StatusOK, antwort)
 	})
 
 	mux.HandleFunc("POST /v1/stoppen", func(w http.ResponseWriter, r *http.Request) {

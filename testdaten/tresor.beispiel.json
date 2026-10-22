@@ -1,0 +1,10 @@
+{
+  "testfirma-mueller": {
+    "postfach/info@mueller-test.de": {
+      "server": "imap.example.org",
+      "port": 993,
+      "benutzer": "info@mueller-test.de",
+      "passwort": "HIER-NUR-LOKAL-EINTRAGEN"
+    }
+  }
+}

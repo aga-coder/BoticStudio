@@ -16,7 +16,10 @@ import (
 )
 
 // AktuelleFassung ist die neueste Fassung, die dieser Pförtner versteht.
-const AktuelleFassung = 1
+//
+// Fassung 1: Grundfelder.
+// Fassung 2: dazu "zugang".
+const AktuelleFassung = 2
 
 // KeinRecht ist der ausdrücklich erklärte Wert für Fähigkeiten,
 // die keine Erlaubnis brauchen.
@@ -49,6 +52,9 @@ type Zettel struct {
 	// Datenausgang listet die Arten von Zielen, an die Daten gehen dürfen.
 	// Leer heißt: Es verlassen keine Daten BoticStudio.
 	Datenausgang []string `json:"datenausgang"`
+	// Zugang nennt die Art von Zugangsdaten, die die Fähigkeit braucht,
+	// z. B. "postfach". Leer heißt: keine. Seit Fassung 2.
+	Zugang string `json:"zugang"`
 }
 
 // Schluessel ist die eindeutige Kennung "name@version".
@@ -78,6 +84,7 @@ type roh struct {
 	Risiko          *Risiko  `json:"risiko"`
 	WirktNachAussen *bool    `json:"wirkt_nach_aussen"`
 	Datenausgang    []string `json:"datenausgang"`
+	Zugang          *string  `json:"zugang"`
 }
 
 // Lies prüft einen Beipackzettel im JSON-Format.
@@ -113,6 +120,9 @@ func Lies(daten []byte) (Zettel, error) {
 	if strings.Contains(r.Name, "@") || strings.Contains(r.Version, "@") {
 		return Zettel{}, fmt.Errorf("beipackzettel %q: name und version dürfen kein @ enthalten", r.Name)
 	}
+	if r.Zugang != nil && *r.Fassung < 2 {
+		return Zettel{}, fmt.Errorf("beipackzettel %q: feld \"zugang\" gibt es erst ab fassung 2", r.Name)
+	}
 	if r.Recht != KeinRecht && strings.TrimSpace(r.Bereich) == "" {
 		return Zettel{}, fmt.Errorf("beipackzettel %q: zu recht %q fehlt der bereich", r.Name, r.Recht)
 	}
@@ -141,6 +151,16 @@ func Lies(daten []byte) (Zettel, error) {
 	}
 	if r.WirktNachAussen != nil {
 		z.WirktNachAussen = *r.WirktNachAussen
+	}
+	// Fehlt der Zugang, bekommt die Fähigkeit keine Zugangsdaten.
+	if r.Zugang != nil {
+		if strings.Contains(*r.Zugang, "/") {
+			return Zettel{}, fmt.Errorf("beipackzettel %q: zugang darf kein / enthalten", r.Name)
+		}
+		if *r.Zugang != "" && r.Recht == KeinRecht {
+			return Zettel{}, fmt.Errorf("beipackzettel %q: wer zugangsdaten braucht, braucht auch ein recht", r.Name)
+		}
+		z.Zugang = *r.Zugang
 	}
 	return z, nil
 }
