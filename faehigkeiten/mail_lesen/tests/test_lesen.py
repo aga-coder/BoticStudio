@@ -122,3 +122,35 @@ def test_langer_text_wird_gekuerzt():
 
 def test_imap_datum_ist_englisch():
     assert imap_datum(dt.date(2026, 3, 5)) == "05-Mar-2026"
+
+
+def test_standardverbindung_prueft_zertifikat(monkeypatch):
+    import ssl
+
+    from mail_lesen import lesen
+
+    gesehen = {}
+
+    def ersatz(server, port, ssl_context=None, timeout=None):
+        gesehen["kontext"] = ssl_context
+        raise OSError("abgebrochen")
+
+    monkeypatch.setattr(lesen.imaplib, "IMAP4_SSL", ersatz)
+    with pytest.raises(Fehler):
+        lies("postfach/info@test.de", ZUGANG)
+    kontext = gesehen["kontext"]
+    assert kontext is not None
+    assert kontext.verify_mode == ssl.CERT_REQUIRED and kontext.check_hostname
+
+
+def test_ungueltiges_zertifikat_klare_meldung(monkeypatch):
+    import ssl
+
+    from mail_lesen import lesen
+
+    def ersatz(server, port, ssl_context=None, timeout=None):
+        raise ssl.SSLCertVerificationError("certificate verify failed")
+
+    monkeypatch.setattr(lesen.imaplib, "IMAP4_SSL", ersatz)
+    with pytest.raises(Fehler, match="Zertifikat"):
+        lies("postfach/info@test.de", ZUGANG)
