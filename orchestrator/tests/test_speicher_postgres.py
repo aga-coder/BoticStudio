@@ -2,6 +2,7 @@
 (Rolle boticstudio_ablauf) und BOTICSTUDIO_TEST_ARBEITSDATEN_EIGENTUEMER."""
 
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
@@ -42,7 +43,8 @@ def test_speichern_und_ueberschreiben(eigentuemer):
 
 
 def test_falsches_passwort_ohne_passwort_im_fehler():
-    falsch = DSN.replace("nur-fuer-tests-ablauf", "GanzGeheim987")
+    teile = urlsplit(DSN)
+    falsch = urlunsplit(teile._replace(netloc=f"{teile.username}:GanzGeheim987@{teile.hostname}:{teile.port or 5432}"))
     with pytest.raises(RuntimeError) as f:
         PostgresSpeicher(falsch)
     assert "GanzGeheim987" not in str(f.value)
