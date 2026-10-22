@@ -11,6 +11,9 @@ package pfoertner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -188,6 +191,46 @@ func (p *Pfoertner) Stoppe(ctx context.Context, firma, aufgabeID, personID strin
 	})
 }
 
+// MerkeVorpruefung speichert das Ergebnis einer prüfenden Fähigkeit zu genau
+// den Daten, die sie geprüft hat (laut Beipackzettel "prueft"). Spätere
+// Schritte mit denselben Daten bekommen diese Markierungen vom Pförtner.
+func (p *Pfoertner) MerkeVorpruefung(ctx context.Context, a Anfrage, markierungen []string) error {
+	z, ok := p.katalog.Finde(a.Faehigkeit, a.Version)
+	if !ok || len(z.Prueft) == 0 {
+		return errors.New("diese fähigkeit prüft nichts")
+	}
+	return p.speicher.Vorgang(ctx, a.Firma, func(v Vorgang) error {
+		var geprueft []string
+		for _, eingabe := range z.Prueft {
+			fp, da := a.Daten[eingabe]
+			if !da {
+				continue
+			}
+			if err := v.SpeichereVorpruefung(fp, z.Schluessel(), markierungen); err != nil {
+				return err
+			}
+			geprueft = append(geprueft, eingabe+"="+fp)
+		}
+		if len(geprueft) == 0 {
+			return errors.New("keine geprüften daten")
+		}
+		return schreibe(v, "vorpruefung", map[string]string{
+			"aufgabe": a.Aufgabe, "faehigkeit": z.Schluessel(),
+			"daten": strings.Join(geprueft, ","), "markierungen": strings.Join(markierungen, ","),
+		})
+	})
+}
+
+// Fingerabdruck kennzeichnet den Inhalt einer Eingabe, ohne ihn zu speichern.
+func Fingerabdruck(wert any) (string, error) {
+	roh, err := json.Marshal(wert)
+	if err != nil {
+		return "", err
+	}
+	summe := sha256.Sum256(roh)
+	return "sha256:" + hex.EncodeToString(summe[:]), nil
+}
+
 // Vermerke schreibt einen Eintrag ins Audit der Firma, z. B. nach einer Ausführung.
 func (p *Pfoertner) Vermerke(ctx context.Context, firma, art string, inhalt map[string]string) error {
 	return p.speicher.Vorgang(ctx, firma, func(v Vorgang) error {
@@ -206,7 +249,7 @@ func (p *Pfoertner) Pruefe(ctx context.Context, a Anfrage) Entscheidung {
 	err := p.speicher.Vorgang(ctx, a.Firma, func(v Vorgang) error {
 		var anwenden func() error
 		var err error
-		ent, anwenden, err = p.entscheide(v, a)
+		ent, anwenden, err = p.entscheide(v, &a)
 		if err != nil {
 			return err
 		}
@@ -247,7 +290,9 @@ var (
 // entscheide trifft die Entscheidung, ohne etwas zu verändern. Was sich bei
 // "erlaubt" ändern muss, kommt als Funktion zurück und läuft erst, wenn
 // der Audit-Eintrag geschrieben ist.
-func (p *Pfoertner) entscheide(v Vorgang, a Anfrage) (Entscheidung, func() error, error) {
+//
+// Markierungen aus der Vorprüfung trägt sie in a ein, damit sie im Audit stehen.
+func (p *Pfoertner) entscheide(v Vorgang, a *Anfrage) (Entscheidung, func() error, error) {
 	nein := func(grund string, args ...any) (Entscheidung, func() error, error) {
 		return Entscheidung{Ergebnis: Abgelehnt, Grund: fmt.Sprintf(grund, args...)}, nil, nil
 	}
@@ -304,9 +349,19 @@ func (p *Pfoertner) entscheide(v Vorgang, a Anfrage) (Entscheidung, func() error
 		}
 	}
 
-	// 5. Verlassen Daten BoticStudio?
+	// 5. Verlassen Daten BoticStudio? Dann nur geprüfte Daten an ein erlaubtes Ziel.
+	if len(z.Datenausgang) > 0 && a.Ziel == nil {
+		return nein("%s gibt Daten hinaus, dafür fehlt das Ziel.", z.Name)
+	}
 	if a.Ziel != nil {
-		if grund := p.pruefeZiel(firma, a, z); grund != "" {
+		grund, err := p.uebernimmVorpruefung(v, a, z)
+		if err != nil {
+			return Entscheidung{}, nil, err
+		}
+		if grund != "" {
+			return nein("%s", grund)
+		}
+		if grund := p.pruefeZiel(firma, *a, z); grund != "" {
 			return nein("%s", grund)
 		}
 	}
@@ -339,6 +394,37 @@ func (p *Pfoertner) entscheide(v Vorgang, a Anfrage) (Entscheidung, func() error
 		}
 		return nil
 	}, nil
+}
+
+// uebernimmVorpruefung verlangt für jede Eingabe, die laut Beipackzettel
+// vorgeprüft sein muss, ein gespeichertes Prüfergebnis zu genau diesem
+// Inhalt, und fügt dessen Markierungen der Anfrage hinzu.
+func (p *Pfoertner) uebernimmVorpruefung(v Vorgang, a *Anfrage, z beipackzettel.Zettel) (string, error) {
+	if len(z.BrauchtVorpruefung) == 0 {
+		return "", nil
+	}
+	if a.Daten == nil {
+		return "Ob die Daten vorgeprüft sind, stellt der Pförtner erst beim Ausführen fest.", nil
+	}
+	for _, eingabe := range z.BrauchtVorpruefung {
+		fp, da := a.Daten[eingabe]
+		if !da {
+			continue // nicht mitgegeben, geht also nicht hinaus
+		}
+		markierungen, geprueft, err := v.Vorpruefung(fp)
+		if err != nil {
+			return "", err
+		}
+		if !geprueft {
+			return fmt.Sprintf("Die Eingabe %q ist nicht vorgeprüft. Ungeprüft geht sie an kein Ziel.", eingabe), nil
+		}
+		for _, m := range markierungen {
+			if !enthaelt(a.Markierungen, m) {
+				a.Markierungen = append(a.Markierungen, m)
+			}
+		}
+	}
+	return "", nil
 }
 
 func (p *Pfoertner) findeErlaubnis(kandidaten []Erlaubnis, person, bereich string) *Erlaubnis {

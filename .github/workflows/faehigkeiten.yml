@@ -7,11 +7,15 @@ on:
     paths: ["faehigkeiten/**", ".github/workflows/faehigkeiten.yml"]
 
 jobs:
-  mail_lesen:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        modul: [mail_lesen, besondere_daten_pruefen, mail_einordnen]
     defaults:
       run:
-        working-directory: faehigkeiten/mail_lesen
+        working-directory: faehigkeiten/${{ matrix.modul }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

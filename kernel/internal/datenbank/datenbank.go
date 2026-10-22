@@ -308,6 +308,27 @@ func (v *vorgang) SpeichereAufgabe(id string, a pfoertner.Aufgabenstand) error {
 	return err
 }
 
+func (v *vorgang) Vorpruefung(fp string) ([]string, bool, error) {
+	var markierungen []string
+	var anzahl int
+	err := v.tx.QueryRow(v.ctx, `SELECT count(*), coalesce(array_agg(DISTINCT m) FILTER (WHERE m IS NOT NULL), '{}')
+		FROM kern.vorpruefungen LEFT JOIN LATERAL unnest(markierungen) AS m ON true
+		WHERE firma = $1 AND fingerabdruck = $2`, v.firma, fp).Scan(&anzahl, &markierungen)
+	if err != nil {
+		return nil, false, err
+	}
+	return markierungen, anzahl > 0, nil
+}
+
+func (v *vorgang) SpeichereVorpruefung(fp, faehigkeit string, markierungen []string) error {
+	if markierungen == nil {
+		markierungen = []string{}
+	}
+	_, err := v.tx.Exec(v.ctx, `INSERT INTO kern.vorpruefungen (firma, fingerabdruck, faehigkeit, markierungen, geprueft_am)
+		VALUES ($1, $2, $3, $4, $5)`, v.firma, fp, faehigkeit, markierungen, v.uhr())
+	return err
+}
+
 func (v *vorgang) Schreibe(art string, inhalt map[string]string) (auditor.Eintrag, error) {
 	var vorher *auditor.Eintrag
 	var nr int

@@ -36,6 +36,10 @@ type Vorgang interface {
 	// Aufgabe liefert den Stand einer Aufgabe und sperrt ihn bis zum Ende des Vorgangs.
 	Aufgabe(id string) (Aufgabenstand, error)
 	SpeichereAufgabe(id string, a Aufgabenstand) error
+	// Vorpruefung liefert die Markierungen aller Prüfungen eines Inhalts.
+	// geprueft ist false, wenn ihn noch keine prüfende Fähigkeit gesehen hat.
+	Vorpruefung(fingerabdruck string) (markierungen []string, geprueft bool, err error)
+	SpeichereVorpruefung(fingerabdruck, faehigkeit string, markierungen []string) error
 	// Schreibe hängt einen Eintrag an die Audit-Kette der Firma.
 	Schreibe(art string, inhalt map[string]string) (auditor.Eintrag, error)
 }
@@ -70,7 +74,9 @@ type firmendaten struct {
 	personen    map[string]Person
 	erlaubnisse map[string]Erlaubnis
 	aufgaben    map[string]Aufgabenstand
-	audit       []auditor.Eintrag
+	// vorpruefungen: Fingerabdruck -> Markierungen (vereinigt)
+	vorpruefungen map[string][]string
+	audit         []auditor.Eintrag
 }
 
 // NeuerArbeitsspeicher erstellt einen leeren Speicher.
@@ -110,11 +116,15 @@ func (s *Arbeitsspeicher) Audit(firma string) []auditor.Eintrag {
 
 func (d *firmendaten) kopie() *firmendaten {
 	k := &firmendaten{
-		firma:       d.firma,
-		personen:    make(map[string]Person, len(d.personen)),
-		erlaubnisse: make(map[string]Erlaubnis, len(d.erlaubnisse)),
-		aufgaben:    make(map[string]Aufgabenstand, len(d.aufgaben)),
-		audit:       append([]auditor.Eintrag(nil), d.audit...),
+		firma:         d.firma,
+		personen:      make(map[string]Person, len(d.personen)),
+		erlaubnisse:   make(map[string]Erlaubnis, len(d.erlaubnisse)),
+		aufgaben:      make(map[string]Aufgabenstand, len(d.aufgaben)),
+		vorpruefungen: make(map[string][]string, len(d.vorpruefungen)),
+		audit:         append([]auditor.Eintrag(nil), d.audit...),
+	}
+	for fp, m := range d.vorpruefungen {
+		k.vorpruefungen[fp] = append([]string(nil), m...)
 	}
 	for id, p := range d.personen {
 		k.personen[id] = p
@@ -222,6 +232,31 @@ func (v *speicherVorgang) SpeichereAufgabe(id string, a Aufgabenstand) error {
 		return ErrUnbekannteFirma
 	}
 	v.d.aufgaben[id] = a
+	return nil
+}
+
+func (v *speicherVorgang) Vorpruefung(fp string) ([]string, bool, error) {
+	if v.d == nil {
+		return nil, false, nil
+	}
+	m, da := v.d.vorpruefungen[fp]
+	return append([]string(nil), m...), da, nil
+}
+
+func (v *speicherVorgang) SpeichereVorpruefung(fp, _ string, markierungen []string) error {
+	if v.d == nil {
+		return ErrUnbekannteFirma
+	}
+	if v.d.vorpruefungen == nil {
+		v.d.vorpruefungen = map[string][]string{}
+	}
+	m := append([]string{}, v.d.vorpruefungen[fp]...)
+	for _, neu := range markierungen {
+		if !enthaelt(m, neu) {
+			m = append(m, neu)
+		}
+	}
+	v.d.vorpruefungen[fp] = m
 	return nil
 }
 

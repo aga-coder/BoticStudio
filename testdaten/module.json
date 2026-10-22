@@ -1,3 +1,5 @@
 {
-  "mail_lesen@1.0.0": "http://127.0.0.1:8481/mcp"
+  "mail_lesen@1.0.0": "http://127.0.0.1:8481/mcp",
+  "besondere_daten_pruefen@1.0.0": "http://127.0.0.1:8482/mcp",
+  "mail_einordnen@1.0.0": "http://127.0.0.1:8483/mcp"
 }

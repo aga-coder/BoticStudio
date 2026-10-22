@@ -29,6 +29,9 @@ var testZettel = []string{
 	`{"fassung":1,"name":"lesen","version":"2","beschreibung":"liest neuer","recht":"lesen","bereich":"postfach/ordner","risiko":"niedrig","wirkt_nach_aussen":false}`,
 	`{"fassung":1,"name":"einordnen","version":"1","beschreibung":"ordnet ein","recht":"einordnen","bereich":"postfach","risiko":"mittel","wirkt_nach_aussen":false,"datenausgang":["ki_modell"]}`,
 	`{"fassung":1,"name":"pruefen","version":"1","beschreibung":"prüft","recht":"keins","risiko":"niedrig","wirkt_nach_aussen":false}`,
+	`{"fassung":3,"name":"vorpruefen","version":"1","beschreibung":"prüft","recht":"keins","risiko":"niedrig","wirkt_nach_aussen":false,"eingaben":["mail"],"ausgaben":["markierungen"],"prueft":["mail"]}`,
+	`{"fassung":3,"name":"zuordnen","version":"1","beschreibung":"ordnet zu","recht":"einordnen","bereich":"postfach","risiko":"mittel","wirkt_nach_aussen":false,"datenausgang":["ki_modell"],"eingaben":["mail","kategorien"],"braucht_vorpruefung":["mail"]}`,
+	`{"fassung":1,"name":"zuordnen_alt","version":"1","beschreibung":"ordnet zu","recht":"einordnen","bereich":"postfach","risiko":"mittel","wirkt_nach_aussen":false,"datenausgang":["ki_modell"],"eingaben":["mail","kategorien"]}`,
 	`{"fassung":1,"name":"senden","version":"1","beschreibung":"sendet","recht":"senden","bereich":"postfach","risiko":"mittel","wirkt_nach_aussen":true}`,
 }
 
@@ -409,5 +412,106 @@ func TestOhneAuditKeineAktion(t *testing.T) {
 		if err := heil.ErteileErlaubnis(ctx, Erlaubnis{ID: "x", Firma: "a", Recht: "lesen", Bereich: postfachA, Dauer: Einmalig, ErteiltVon: "anna"}); err != nil {
 			t.Fatal("erlaubnis x wurde trotz fehler gespeichert:", err)
 		}
+	})
+}
+
+func fingerabdruck(t *testing.T, wert any) string {
+	t.Helper()
+	fp, err := Fingerabdruck(wert)
+	muss(t, err)
+	return fp
+}
+
+// vorpruefen lässt die prüfende Fähigkeit einen Inhalt prüfen und merkt das Ergebnis.
+func vorpruefen(t *testing.T, u *umgebung, inhalt any, markierungen ...string) {
+	t.Helper()
+	a := Anfrage{Firma: "a", Person: "ben", Aufgabe: "t-pruefen", Faehigkeit: "vorpruefen", Version: "1",
+		Daten: map[string]string{"mail": fingerabdruck(t, inhalt)}}
+	erwarte(t, u.p.Pruefe(ctx, a), Erlaubt, "")
+	muss(t, u.p.MerkeVorpruefung(ctx, a, markierungen))
+}
+
+func zuordnenA(t *testing.T, faehigkeit, ziel string, inhalt any) Anfrage {
+	return Anfrage{Firma: "a", Person: "ben", Aufgabe: "t-" + faehigkeit + ziel, Faehigkeit: faehigkeit, Version: "1",
+		Bereich: postfachA, Ziel: &Ziel{Art: "ki_modell", Adresse: ziel},
+		Daten: map[string]string{"mail": fingerabdruck(t, inhalt), "kategorien": fingerabdruck(t, "Anfrage, Beschwerde")}}
+}
+
+// Wer Daten hinausgibt, muss sagen wohin. Sonst prüft der Pförtner nichts.
+func TestDatenausgangOhneZiel(t *testing.T) {
+	jedeUmgebung(t, func(t *testing.T, u *umgebung) {
+		a := zuordnenA(t, "zuordnen", "openrouter.ai", "hallo")
+		a.Ziel = nil
+		erwarte(t, u.p.Pruefe(ctx, a), Abgelehnt, "fehlt das Ziel")
+	})
+}
+
+// Art. 9, erste Filterstufe: Ungeprüftes geht nirgendwohin. Was die Prüfung
+// markiert, geht nicht außerhalb der EU. Ohne Treffer geht es zum Modell.
+func TestVorpruefungVorDemDatenausgang(t *testing.T) {
+	jedeUmgebung(t, func(t *testing.T, u *umgebung) {
+		harmlos := map[string]any{"betreff": "Angebot", "text": "Bitte um ein Angebot."}
+		heikel := map[string]any{"betreff": "Krankmeldung", "text": "Ich bin krank."}
+
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "openrouter.ai", harmlos)), Abgelehnt, "nicht vorgeprüft")
+
+		vorpruefen(t, u, harmlos)
+		vorpruefen(t, u, heikel, "art9_verdacht")
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "openrouter.ai", harmlos)), Erlaubt, "")
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "openrouter.ai", heikel)), Abgelehnt, "art9_verdacht")
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "eu-modell.example", heikel)), Erlaubt, "")
+
+		// Schon ein Zeichen anders ist ein anderer Inhalt und wieder ungeprüft.
+		geaendert := map[string]any{"betreff": "Angebot", "text": "Bitte um ein Angebot!"}
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "openrouter.ai", geaendert)), Abgelehnt, "nicht vorgeprüft")
+
+		// Eine spätere Prüfung ohne Treffer nimmt die Markierung nicht weg.
+		vorpruefen(t, u, heikel)
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "openrouter.ai", heikel)), Abgelehnt, "art9_verdacht")
+
+		// Die Markierung steht im Audit der Prüfung.
+		eintraege := u.audit("a")
+		letzte := eintraege[len(eintraege)-1]
+		if letzte.Inhalt["markierungen"] != "art9_verdacht" || letzte.Inhalt["ergebnis"] != "abgelehnt" {
+			t.Fatalf("audit ohne markierung: %v", letzte.Inhalt)
+		}
+	})
+}
+
+// Regel B: Ein alter Zettel mit Datenausgang ohne "braucht_vorpruefung"
+// braucht für jede Eingabe eine Vorprüfung, auch für die Kategorien.
+func TestAlterZettelBrauchtVorpruefungFuerAlles(t *testing.T) {
+	jedeUmgebung(t, func(t *testing.T, u *umgebung) {
+		mail := "Guten Tag"
+		vorpruefen(t, u, mail)
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen_alt", "openrouter.ai", mail)), Abgelehnt, `"kategorien" ist nicht vorgeprüft`)
+		erwarte(t, u.p.Pruefe(ctx, zuordnenA(t, "zuordnen", "openrouter.ai", mail)), Erlaubt, "")
+	})
+}
+
+// Ohne die echten Daten (reine Prüfanfrage) lässt sich die Vorprüfung nicht
+// belegen, also wird abgelehnt.
+func TestVorpruefungNurBeimAusfuehren(t *testing.T) {
+	jedeUmgebung(t, func(t *testing.T, u *umgebung) {
+		a := zuordnenA(t, "zuordnen", "openrouter.ai", "x")
+		a.Daten = nil
+		erwarte(t, u.p.Pruefe(ctx, a), Abgelehnt, "erst beim Ausführen")
+	})
+}
+
+// Nur eine Fähigkeit, die laut Zettel prüft, kann Prüfergebnisse hinterlegen.
+// Und Prüfergebnisse gelten nur in der eigenen Firma.
+func TestVorpruefungNurDurchPrueferUndJeFirma(t *testing.T) {
+	jedeUmgebung(t, func(t *testing.T, u *umgebung) {
+		a := zuordnenA(t, "zuordnen", "openrouter.ai", "x")
+		if err := u.p.MerkeVorpruefung(ctx, a, nil); err == nil {
+			t.Fatal("nicht-prüfende fähigkeit konnte ein prüfergebnis hinterlegen")
+		}
+		muss(t, u.p.ErteileErlaubnis(ctx, Erlaubnis{ID: "b-einordnen", Firma: "b", Recht: "einordnen", Bereich: postfachB, Dauer: Dauerhaft, ErteiltVon: "bea"}))
+		vorpruefen(t, u, "gleicher text")
+		b := zuordnenA(t, "zuordnen", "openrouter.ai", "gleicher text")
+		b.Firma, b.Person, b.Bereich = "b", "bea", postfachB
+		b.Ziel = &Ziel{Art: "ki_modell", Adresse: "openrouter.ai"}
+		erwarte(t, u.p.Pruefe(ctx, b), Abgelehnt, "nicht vorgeprüft")
 	})
 }
