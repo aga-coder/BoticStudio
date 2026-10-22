@@ -26,8 +26,11 @@ import (
 // Umgebungsvariable mit der Verbindung für Tests.
 const Variable = "BOTICSTUDIO_TEST_DATENBANK"
 
-// PfoertnerPasswort ist nur für Testdatenbanken.
-const PfoertnerPasswort = "nur-fuer-tests-pfoertner"
+// Passwörter nur für Testdatenbanken.
+const (
+	PfoertnerPasswort = "nur-fuer-tests-pfoertner"
+	AblaufPasswort    = "nur-fuer-tests-ablauf"
+)
 
 var (
 	vorlageEinmal sync.Once
@@ -43,6 +46,8 @@ type Datenbank struct {
 	Eigentuemer *pgxpool.Pool
 	// PfoertnerDSN ist die Verbindungsangabe der Pförtner-Rolle.
 	PfoertnerDSN string
+	// AblaufDSN ist die Verbindungsangabe der Rolle des Ablaufs.
+	AblaufDSN string
 }
 
 // Neu legt eine frische Datenbank an oder überspringt den Test.
@@ -86,7 +91,8 @@ func Neu(t testing.TB) *Datenbank {
 			admin.Close(ctx)
 		}
 	})
-	return &Datenbank{Pfoertner: pf, Eigentuemer: eigentuemer, PfoertnerDSN: pfoertnerDSN}
+	return &Datenbank{Pfoertner: pf, Eigentuemer: eigentuemer, PfoertnerDSN: pfoertnerDSN,
+		AblaufDSN: mitDatenbank(t, basis, name, "boticstudio_ablauf", AblaufPasswort)}
 }
 
 func legeVorlageAn(ctx context.Context, basis string) (string, error) {
@@ -120,6 +126,9 @@ func legeVorlageAn(ctx context.Context, basis string) (string, error) {
 	}
 	// Im Betrieb setzt das der Betreiber. Für Tests bekommt die Rolle ein festes Passwort.
 	if _, err := pool.Exec(ctx, "ALTER ROLE boticstudio_pfoertner LOGIN PASSWORD '"+PfoertnerPasswort+"'"); err != nil {
+		return "", err
+	}
+	if _, err := pool.Exec(ctx, "ALTER ROLE boticstudio_ablauf LOGIN PASSWORD '"+AblaufPasswort+"'"); err != nil {
 		return "", err
 	}
 	return name, nil
