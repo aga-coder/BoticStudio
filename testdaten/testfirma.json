@@ -1,0 +1,38 @@
+{
+  "firmen": [
+    {
+      "id": "testfirma-mueller",
+      "ziele": [
+        {
+          "art": "ki_modell",
+          "adresse": "openrouter.ai",
+          "region": "ausserhalb_eu",
+          "einwilligung_von": "anna",
+          "einwilligung_am": "2026-10-22T20:00:00Z"
+        }
+      ]
+    }
+  ],
+  "personen": [
+    { "id": "anna", "firma": "testfirma-mueller", "rolle": "admin" },
+    { "id": "ben", "firma": "testfirma-mueller", "rolle": "ausfuehrend" }
+  ],
+  "erlaubnisse": [
+    {
+      "id": "e1",
+      "firma": "testfirma-mueller",
+      "recht": "mail.lesen",
+      "bereich": "postfach/info@mueller-test.de",
+      "dauer": "dauerhaft",
+      "erteilt_von": "anna"
+    },
+    {
+      "id": "e2",
+      "firma": "testfirma-mueller",
+      "recht": "mail.einordnen",
+      "bereich": "postfach/info@mueller-test.de",
+      "dauer": "dauerhaft",
+      "erteilt_von": "anna"
+    }
+  ]
+}

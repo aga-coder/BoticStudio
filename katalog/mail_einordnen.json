@@ -1,0 +1,13 @@
+{
+  "fassung": 1,
+  "name": "mail_einordnen",
+  "version": "1.0.0",
+  "beschreibung": "Legt eine Mail mit den Kategorie-Beschreibungen der Firma einem KI-Modell vor und bekommt Kategorie und kurze Begründung zurück.",
+  "eingaben": ["mail", "kategorien"],
+  "ausgaben": ["kategorie", "begruendung", "unsicher"],
+  "recht": "mail.einordnen",
+  "bereich": "postfach",
+  "risiko": "mittel",
+  "wirkt_nach_aussen": false,
+  "datenausgang": ["ki_modell"]
+}

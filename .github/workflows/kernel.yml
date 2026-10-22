@@ -1,0 +1,23 @@
+name: Pförtner
+
+on:
+  push:
+    paths: ["kernel/**", "katalog/**", ".github/workflows/kernel.yml"]
+  pull_request:
+    paths: ["kernel/**", "katalog/**", ".github/workflows/kernel.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kernel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kernel/go.mod
+      - name: Format prüfen
+        run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
