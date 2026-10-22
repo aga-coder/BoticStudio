@@ -15,6 +15,7 @@ import email
 import email.policy
 import imaplib
 import re
+import ssl
 from dataclasses import asdict, dataclass
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
@@ -88,6 +89,15 @@ def _datum(wert: str | None) -> str:
         return ""
 
 
+def verbinde_sicher(server: str, port: int, timeout: float) -> imaplib.IMAP4_SSL:
+    """IMAP über TLS mit Prüfung von Zertifikat und Servername.
+
+    imaplib prüft das Zertifikat ohne eigenen Kontext nicht. Dann könnte sich
+    jemand dazwischenschalten und das Passwort abgreifen.
+    """
+    return imaplib.IMAP4_SSL(server, port, ssl_context=ssl.create_default_context(), timeout=timeout)
+
+
 def lies(
     bereich: str,
     zugang: dict[str, Any],
@@ -110,11 +120,13 @@ def lies(
     port = int(zugang.get("port", 993))
 
     if verbinde is None:
-        verbinde = imaplib.IMAP4_SSL
+        verbinde = verbinde_sicher
     seit = (heute or dt.date.today()) - dt.timedelta(days=seit_tagen)
 
     try:
         imap = verbinde(server, port, timeout=30)
+    except ssl.SSLCertVerificationError:
+        raise Fehler("Das Zertifikat des Mailservers ist nicht gültig. Aus Sicherheitsgründen keine Verbindung.") from None
     except (OSError, imaplib.IMAP4.error):
         raise Fehler("Der Mailserver ist nicht erreichbar.") from None
     try:
