@@ -1,0 +1,13 @@
+{
+  "fassung": 1,
+  "name": "mail_lesen",
+  "version": "1.0.0",
+  "beschreibung": "Holt neue Mails aus einem Postfach. Ändert dort nichts, die Mails bleiben ungelesen.",
+  "eingaben": ["postfach", "ordner", "seit"],
+  "ausgaben": ["mails"],
+  "recht": "mail.lesen",
+  "bereich": "postfach/ordner",
+  "risiko": "niedrig",
+  "wirkt_nach_aussen": false,
+  "datenausgang": []
+}

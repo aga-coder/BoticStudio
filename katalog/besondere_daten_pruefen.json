@@ -1,0 +1,12 @@
+{
+  "fassung": 1,
+  "name": "besondere_daten_pruefen",
+  "version": "1.0.0",
+  "beschreibung": "Sucht mit einer Wortliste nach Hinweisen auf besondere Daten nach Art. 9 DSGVO und markiert die Mail. Läuft innerhalb der EU. Erste Filterstufe, keine Garantie.",
+  "eingaben": ["mail"],
+  "ausgaben": ["markierungen"],
+  "recht": "keins",
+  "risiko": "niedrig",
+  "wirkt_nach_aussen": false,
+  "datenausgang": []
+}
