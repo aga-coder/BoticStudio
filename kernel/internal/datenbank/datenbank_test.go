@@ -77,7 +77,7 @@ func zaehle(t *testing.T, tx pgx.Tx, tabelle string) int {
 	return n
 }
 
-var tabellen = []string{"kern.firmen", "kern.personen", "kern.erlaubnisse", "kern.aufgaben", "audit.ketten", "audit.eintraege"}
+var tabellen = []string{"kern.firmen", "kern.personen", "kern.erlaubnisse", "kern.aufgaben", "kern.vorpruefungen", "audit.ketten", "audit.eintraege"}
 
 // Eine Abfrage ganz ohne Firmenfilter sieht nur die eigene Firma, ohne
 // gesetzte Firma gar nichts. Das gilt für den Pförtner und, wegen FORCE,
@@ -171,7 +171,7 @@ func TestPfoertnerDarfNichtLoeschenUndAuditNichtAendern(t *testing.T) {
 	}
 }
 
-// Wächter für die Zukunft: Jede Tabelle in kern und audit muss RLS mit FORCE
+// Wächter für die Zukunft: Jede Tabelle in kern, audit und arbeit muss RLS mit FORCE
 // und eine Richtlinie haben. Eine neue Tabelle ohne Trennung fällt hier auf.
 func TestJedeTabelleHatErzwungeneTrennung(t *testing.T) {
 	db := testdb.Neu(t)
@@ -179,7 +179,7 @@ func TestJedeTabelleHatErzwungeneTrennung(t *testing.T) {
 		SELECT n.nspname || '.' || c.relname, c.relrowsecurity, c.relforcerowsecurity,
 		       EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)
 		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname IN ('kern', 'audit') AND c.relkind IN ('r', 'p')`)
+		WHERE n.nspname IN ('kern', 'audit', 'arbeit') AND c.relkind IN ('r', 'p')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestJedeTabelleHatErzwungeneTrennung(t *testing.T) {
 			t.Errorf("%s: rls=%v force=%v richtlinie=%v", name, rls, force, richtlinie)
 		}
 	}
-	if anzahl < len(tabellen) {
+	if anzahl < len(tabellen)+1 {
 		t.Fatalf("nur %d tabellen gefunden", anzahl)
 	}
 
@@ -268,5 +268,55 @@ func TestPasswortNieInFehlermeldungen(t *testing.T) {
 		if strings.Contains(err.Error(), falsch) {
 			t.Errorf("passwort in fehlermeldung: %v", err)
 		}
+	}
+}
+
+// Der Ablauf schreibt Ergebnisse nur für die eigene Firma, sieht nichts von
+// anderen Firmen und kommt weder an Erlaubnisse noch an das Audit.
+func TestAblaufRolleNurArbeitsdatenDerEigenenFirma(t *testing.T) {
+	db := testdb.Neu(t)
+	befuelle(t, db)
+	ablauf, err := datenbank.Oeffne(ctx, db.AblaufDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ablauf.Close()
+
+	einfuegen := `INSERT INTO arbeit.einordnungen (firma, bereich, uid, stand, kategorie, aufgabe)
+		VALUES ($1, 'postfach/x', '1', 'eingeordnet', 'Anfrage', 't')`
+	for _, f := range []string{"a", "b"} {
+		alsFirma(t, ablauf, f, func(tx pgx.Tx) {
+			if _, err := tx.Exec(ctx, einfuegen, f); err != nil {
+				t.Fatal(err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	alsFirma(t, ablauf, "", func(tx pgx.Tx) {
+		if n := zaehle(t, tx, "arbeit.einordnungen"); n != 0 {
+			t.Errorf("ohne firma %d zeilen sichtbar", n)
+		}
+	})
+	alsFirma(t, ablauf, "a", func(tx pgx.Tx) {
+		if n := zaehle(t, tx, "arbeit.einordnungen"); n != 1 {
+			t.Errorf("als a %d zeilen sichtbar, erwartet 1", n)
+		}
+		if _, err := tx.Exec(ctx, einfuegen, "b"); err == nil || !strings.Contains(err.Error(), "row-level security") {
+			t.Errorf("schreiben für b als a: %v", err)
+		}
+	})
+	for _, sql := range []string{
+		`SELECT count(*) FROM kern.erlaubnisse`,
+		`SELECT count(*) FROM audit.eintraege`,
+		`SELECT count(*) FROM kern.vorpruefungen`,
+		`DELETE FROM arbeit.einordnungen`,
+	} {
+		alsFirma(t, ablauf, "a", func(tx pgx.Tx) {
+			if _, err := tx.Exec(ctx, sql); err == nil || !strings.Contains(err.Error(), "permission denied") {
+				t.Errorf("%s: fehler %v, erwartet permission denied", sql, err)
+			}
+		})
 	}
 }

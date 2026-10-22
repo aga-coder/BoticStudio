@@ -1,0 +1,50 @@
+name: Ablauf
+
+on:
+  push:
+    paths: ["orchestrator/**", "kernel/internal/datenbank/migrationen/**", "testdaten/ablauf.json", ".github/workflows/orchestrator.yml"]
+  pull_request:
+    paths: ["orchestrator/**", "kernel/internal/datenbank/migrationen/**", "testdaten/ablauf.json", ".github/workflows/orchestrator.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: nur-fuer-ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Wegwerf-Datenbank nur für diesen Testlauf, kein echtes Geheimnis.
+      BOTICSTUDIO_TEST_ARBEITSDATEN: postgres://boticstudio_ablauf:nur-fuer-ci@localhost:5432/boticstudio?sslmode=disable
+      BOTICSTUDIO_TEST_ARBEITSDATEN_EIGENTUEMER: postgres://boticstudio_eigentuemer:nur-fuer-ci@localhost:5432/boticstudio?sslmode=disable
+    defaults:
+      run:
+        shell: bash
+        working-directory: orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: kernel/go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Datenbank einrichten (Schema wie im Betrieb)
+        env:
+          PGPASSWORD: nur-fuer-ci
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE boticstudio_eigentuemer LOGIN CREATEROLE PASSWORD 'nur-fuer-ci'" \
+            -c "CREATE DATABASE boticstudio OWNER boticstudio_eigentuemer"
+          (cd ../kernel && BOTICSTUDIO_DATENBANK_EIGENTUEMER="$BOTICSTUDIO_TEST_ARBEITSDATEN_EIGENTUEMER" go run ./cmd/migrieren)
+          psql -h localhost -U postgres -c "ALTER ROLE boticstudio_ablauf LOGIN PASSWORD 'nur-fuer-ci'"
+      - run: pip install -r requirements-dev.txt
+      - name: Tests (mit PostgreSQL)
+        run: |
+          python -m pytest -q -rs | tee tests.log
+          # Die Datenbank-Tests dürfen in CI nicht still übersprungen werden.
+          ! grep -q "SKIPPED" tests.log

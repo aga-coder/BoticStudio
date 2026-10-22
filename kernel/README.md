@@ -46,6 +46,7 @@ Ohne Datenbank hält der Pförtner alles im Arbeitsspeicher (zum Ausprobieren). 
 
 - Jede Tabelle hat Row-Level Security mit `FORCE`. Sichtbar und schreibbar ist nur, was zur Firma des laufenden Vorgangs gehört. Ist keine Firma gesetzt, ist nichts sichtbar.
 - Der Pförtner meldet sich als `boticstudio_pfoertner` an: kein Superuser, darf RLS nicht umgehen, ist nicht Eigentümer der Tabellen, darf nichts löschen.
+- Der Ablauf (Vorstufe des Orchestrators, `orchestrator/`) hat eine eigene Rolle `boticstudio_ablauf`. Sie darf nur Ergebnisse in `arbeit.einordnungen` schreiben, ebenfalls mit RLS je Firma, und kommt weder an Erlaubnisse noch an das Audit noch an die Vorprüfungen.
 - Das Audit lässt sich nur anhängen. Ändern, Löschen und Leeren blockiert ein Trigger, auch für den Eigentümer.
 - Die Tests in `internal/datenbank` beweisen das direkt in der Datenbank: Abfragen ohne Filter sehen nur die eigene Firma, Schreiben in eine fremde Firma scheitert, jede Tabelle hat erzwungene Trennung.
 
@@ -69,6 +70,7 @@ BOTICSTUDIO_DATENBANK_EIGENTUEMER=postgres://boticstudio_eigentuemer:...@localho
 
 # dem Pförtner das Anmelden erlauben
 psql -c "ALTER ROLE boticstudio_pfoertner LOGIN PASSWORD '...'"
+psql -c "ALTER ROLE boticstudio_ablauf LOGIN PASSWORD '...'"
 ```
 
 ## Starten und testen
