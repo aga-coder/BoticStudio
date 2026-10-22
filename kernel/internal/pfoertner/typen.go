@@ -100,8 +100,13 @@ type Anfrage struct {
 	Version    string `json:"version"`
 	Bereich    string `json:"bereich,omitempty"`
 	Ziel       *Ziel  `json:"ziel,omitempty"`
-	// Markierungen, die eine vorherige Prüfung gesetzt hat.
+	// Markierungen, die der Orchestrator zusätzlich setzt. Er kann damit
+	// nur strenger machen: Markierungen aus der Vorprüfung fügt der Pförtner
+	// selbst hinzu, keiner kann sie entfernen.
 	Markierungen []string `json:"markierungen,omitempty"`
+	// Daten: Eingabe -> Fingerabdruck ihres Inhalts. Setzt nur die
+	// Ausführung, nie der Aufrufer. Leer heißt: unbekannt, was hinausgeht.
+	Daten map[string]string `json:"-"`
 }
 
 // Entscheidung ist die Antwort des Pförtners.

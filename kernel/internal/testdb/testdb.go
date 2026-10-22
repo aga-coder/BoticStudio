@@ -96,6 +96,12 @@ func legeVorlageAn(ctx context.Context, basis string) (string, error) {
 		return "", err
 	}
 	defer admin.Close(ctx)
+	// Mehrere Test-Pakete laufen gleichzeitig und ändern dieselbe Rolle.
+	// Die Sperre lässt sie nacheinander einrichten.
+	if _, err := admin.Exec(ctx, "SELECT pg_advisory_lock(4711)"); err != nil {
+		return "", err
+	}
+	defer func() { _, _ = admin.Exec(ctx, "SELECT pg_advisory_unlock(4711)") }()
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		return "", err
 	}

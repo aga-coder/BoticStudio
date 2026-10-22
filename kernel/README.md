@@ -5,7 +5,8 @@ Der Pförtner prüft jeden Schritt, den der Orchestrator ausführen möchte, und
 ## Zwei Grundregeln
 
 - **Regel A: Der Pförtner kennt keine einzelne Fähigkeit.** Er vergleicht nur den Beipackzettel mit den Erlaubnissen der Firma. Ein Test durchsucht den Code nach Namen von Fähigkeiten, ein zweiter lädt eine ganz neue Fähigkeit nur über ihren Zettel.
-- **Regel B: Der Beipackzettel hat Fassungen.** Neue Felder kommen dazu, alte werden nie gestrichen oder umgedeutet. Fehlt ein Feld, gilt der strengste Wert (`risiko: hoch`, `wirkt_nach_aussen: true`, kein Datenausgang). Eine neuere Fassung, als der Pförtner kennt, lehnt er ab.
+- **Regel B: Der Beipackzettel hat Fassungen.** Neue Felder kommen dazu, alte werden nie gestrichen oder umgedeutet. Fehlt ein Feld, gilt der strengste Wert (`risiko: hoch`, `wirkt_nach_aussen: true`, kein Datenausgang, bei Datenausgang muss jede Eingabe vorgeprüft sein). Eine neuere Fassung, als der Pförtner kennt, lehnt er ab.
+  - Fassung 2: `zugang`. Fassung 3: `prueft` und `braucht_vorpruefung`.
 
 ## Was er prüft, der Reihe nach
 
@@ -13,16 +14,27 @@ Der Pförtner prüft jeden Schritt, den der Orchestrator ausführen möchte, und
 2. Läuft die Aufgabe noch, ist die Obergrenze an Schritten erreicht?
 3. Steht die Fähigkeit in dieser Version im Katalog? Bleibt die Aufgabe bei ihrer Version?
 4. Gibt es eine gültige Erlaubnis für genau diesen Bereich (Teil für Teil verglichen)?
-5. Verlassen Daten BoticStudio: Erlaubt der Zettel das Ziel, steht es auf der Liste der Firma, liegt eine Einwilligung vor, und sperrt eine Markierung (z. B. `art9_verdacht`) die Region?
+5. Verlassen Daten BoticStudio: Ist ein Ziel genannt (Pflicht bei Datenausgang)? Sind die Daten vorgeprüft (siehe unten)? Erlaubt der Zettel das Ziel, steht es auf der Liste der Firma, liegt eine Einwilligung vor, und sperrt eine Markierung (z. B. `art9_verdacht`) die Region?
 6. Wirkt es nach außen oder ist es riskant: dann **wartet**.
 
 Jede Entscheidung geht an den Auditor (nur anhängen, Hash-Kette je Firma). Kann er nicht schreiben, wird abgelehnt. Entscheidung, Audit-Eintrag und Folgen (z. B. eine einmalige Erlaubnis gilt als verbraucht) werden gemeinsam gespeichert oder gar nicht.
+
+## Vorprüfung vor dem Datenausgang
+
+Der Pförtner kennt keine einzelne Prüfung, nur zwei Felder im Beipackzettel:
+
+- `prueft`: Diese Fähigkeit prüft die genannten Eingaben und gibt `markierungen` aus. Sie darf selbst keine Daten hinausgeben. Nach dem Ausführen merkt sich der Pförtner ihr Ergebnis zum Fingerabdruck (SHA-256) genau dieser Daten. Der Inhalt selbst wird nicht gespeichert.
+- `braucht_vorpruefung`: Diese Eingaben gehen nur an ein Ziel, wenn es zu genau diesem Inhalt ein Prüfergebnis gibt. Die Markierungen daraus setzt der Pförtner selbst. Der Orchestrator kann Markierungen nur hinzufügen, nie entfernen. Eine spätere Prüfung ohne Treffer nimmt eine Markierung nicht weg.
+
+Die Fingerabdrücke bildet nur die Ausführung aus den echten Eingaben. Eine reine Prüfanfrage (`/v1/pruefen`) kann eine Vorprüfung darum nicht belegen und wird abgelehnt. Prüfergebnisse gelten nur in der eigenen Firma (eigene Tabelle mit RLS, nur anhängen).
+
+Für den ersten Ablauf heißt das: „Besondere Daten prüfen“ läuft in der EU zuerst. Findet sie etwas (`art9_verdacht`), geht die Mail nicht an das Modell außerhalb der EU.
 
 ## Ausführen
 
 `POST /v1/ausfuehren` prüft zuerst wie oben. Nur bei **erlaubt** geht es weiter:
 
-1. Eingaben dürfen nur die sein, die der Beipackzettel nennt. `bereich` und `zugang` setzt allein der Pförtner.
+1. Eingaben dürfen nur die sein, die der Beipackzettel nennt. `bereich`, `zugang` und `ziel` setzt allein der Pförtner.
 2. Nennt der Beipackzettel einen `zugang` (ab Fassung 2), holt der Pförtner ihn aus dem Tresor der eigenen Firma, passend zum geprüften Bereich.
 3. Er ruft das Modul der Fähigkeit über MCP auf, mit Zeitlimit. Welches Modul wo läuft, steht in der Modul-Liste (`-module`).
 4. Steht ein geheimer Wert aus dem Zugang im Ergebnis, wird es zurückgehalten. Fehlermeldungen werden geschwärzt.

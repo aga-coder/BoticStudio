@@ -1,6 +1,7 @@
 // Package ausfuehrung führt einen erlaubten Schritt aus.
 //
-// Ablauf: Der Pförtner prüft. Nur bei "erlaubt" holt die Ausführung die
+// Ablauf: Die Ausführung bildet zu jeder Eingabe einen Fingerabdruck, damit
+// der Pförtner prüfen kann, ob genau diese Daten vorgeprüft sind. Der Pförtner prüft. Nur bei "erlaubt" holt die Ausführung die
 // Zugangsdaten aus dem Tresor, gibt sie direkt an das Modul der Fähigkeit
 // und reicht das Ergebnis zurück. Zugangsdaten verlassen dabei nie den Weg
 // Tresor → Modul: Sie stehen weder im Ergebnis noch im Audit noch in einer
@@ -26,6 +27,7 @@ import (
 const (
 	FeldBereich = "bereich"
 	FeldZugang  = "zugang"
+	FeldZiel    = "ziel"
 )
 
 // Aufrufer ruft ein Modul auf, z. B. über MCP.
@@ -71,6 +73,16 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 		}
 	}
 
+	// Fingerabdrücke setzt nur die Ausführung, aus den echten Eingaben.
+	a.Daten = make(map[string]string, len(auftrag.Eingaben))
+	for k, v := range auftrag.Eingaben {
+		fp, err := pfoertner.Fingerabdruck(v)
+		if err != nil {
+			return Antwort{}, fmt.Errorf("%w: eingabe %q nicht lesbar", ErrUngueltig, k)
+		}
+		a.Daten[k] = fp
+	}
+
 	ent := f.Pfoertner.Pruefe(ctx, a)
 	antwort := Antwort{Entscheidung: ent}
 	if ent.Ergebnis != pfoertner.Erlaubt {
@@ -83,6 +95,10 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 	}
 	if z.Recht != beipackzettel.KeinRecht {
 		args[FeldBereich] = a.Bereich
+	}
+	if a.Ziel != nil {
+		// Das Modul sendet nur an das Ziel, das der Pförtner geprüft hat.
+		args[FeldZiel] = map[string]any{"art": a.Ziel.Art, "adresse": a.Ziel.Adresse}
 	}
 
 	var geheim []string
@@ -115,6 +131,19 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 		return f.fehler(ctx, antwort, a, "Das Ergebnis enthielt Zugangsdaten und wurde zurückgehalten.", "geheimnis im ergebnis", nil), nil
 	}
 
+	if len(z.Prueft) > 0 {
+		var pruefung struct {
+			Markierungen *[]string `json:"markierungen"`
+		}
+		if err := json.Unmarshal(ergebnis, &pruefung); err != nil || pruefung.Markierungen == nil {
+			return f.fehler(ctx, antwort, a, "Das Prüfergebnis war nicht lesbar.", "prüfergebnis ohne markierungen", nil), nil
+		}
+		if err := f.Pfoertner.MerkeVorpruefung(ctx, a, *pruefung.Markierungen); err != nil {
+			antwort.Fehler = "Das Prüfergebnis konnte nicht gespeichert werden."
+			return antwort, nil
+		}
+	}
+
 	if err := f.Pfoertner.Vermerke(ctx, a.Firma, "ausgefuehrt", map[string]string{
 		"aufgabe": a.Aufgabe, "faehigkeit": z.Schluessel(), "bereich": a.Bereich,
 		"pruefung_nr": strconv.Itoa(ent.AuditNr), "bytes": strconv.Itoa(len(ergebnis)),
@@ -140,7 +169,7 @@ func (f *Ausfuehrer) fehler(ctx context.Context, antwort Antwort, a pfoertner.An
 // Bereich und Zugang setzt allein der Pförtner.
 func pruefeEingaben(z beipackzettel.Zettel, eingaben map[string]any) error {
 	for k := range eingaben {
-		if k == FeldBereich || k == FeldZugang {
+		if k == FeldBereich || k == FeldZugang || k == FeldZiel {
 			return fmt.Errorf("%w: eingabe %q setzt nur der pförtner", ErrUngueltig, k)
 		}
 		bekannt := false

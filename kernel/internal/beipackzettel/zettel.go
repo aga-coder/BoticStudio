@@ -19,7 +19,12 @@ import (
 //
 // Fassung 1: Grundfelder.
 // Fassung 2: dazu "zugang".
-const AktuelleFassung = 2
+// Fassung 3: dazu "prueft" und "braucht_vorpruefung".
+const AktuelleFassung = 3
+
+// FeldMarkierungen ist die Ausgabe, in der eine prüfende Fähigkeit ihre
+// Markierungen meldet.
+const FeldMarkierungen = "markierungen"
 
 // KeinRecht ist der ausdrücklich erklärte Wert für Fähigkeiten,
 // die keine Erlaubnis brauchen.
@@ -55,6 +60,15 @@ type Zettel struct {
 	// Zugang nennt die Art von Zugangsdaten, die die Fähigkeit braucht,
 	// z. B. "postfach". Leer heißt: keine. Seit Fassung 2.
 	Zugang string `json:"zugang"`
+	// Prueft nennt Eingaben, die diese Fähigkeit auf heikle Inhalte prüft.
+	// Ihr Ergebnis (Ausgabe "markierungen") merkt sich der Pförtner zu genau
+	// diesen Daten. Eine prüfende Fähigkeit hat keinen Datenausgang.
+	// Seit Fassung 3.
+	Prueft []string `json:"prueft"`
+	// BrauchtVorpruefung nennt Eingaben, die geprüft sein müssen, bevor sie
+	// an ein Ziel gehen. Fehlt das Feld bei einer Fähigkeit mit Datenausgang,
+	// gilt das für alle Eingaben. Seit Fassung 3.
+	BrauchtVorpruefung []string `json:"braucht_vorpruefung"`
 }
 
 // Schluessel ist die eindeutige Kennung "name@version".
@@ -73,18 +87,20 @@ func (z Zettel) DarfSenden(art string) bool {
 // roh hält die Felder so, wie sie im Text stehen. Zeiger zeigen,
 // ob ein Feld fehlt, damit der strengste Wert eingesetzt werden kann.
 type roh struct {
-	Fassung         *int     `json:"fassung"`
-	Name            string   `json:"name"`
-	Version         string   `json:"version"`
-	Beschreibung    string   `json:"beschreibung"`
-	Eingaben        []string `json:"eingaben"`
-	Ausgaben        []string `json:"ausgaben"`
-	Recht           string   `json:"recht"`
-	Bereich         string   `json:"bereich"`
-	Risiko          *Risiko  `json:"risiko"`
-	WirktNachAussen *bool    `json:"wirkt_nach_aussen"`
-	Datenausgang    []string `json:"datenausgang"`
-	Zugang          *string  `json:"zugang"`
+	Fassung            *int      `json:"fassung"`
+	Name               string    `json:"name"`
+	Version            string    `json:"version"`
+	Beschreibung       string    `json:"beschreibung"`
+	Eingaben           []string  `json:"eingaben"`
+	Ausgaben           []string  `json:"ausgaben"`
+	Recht              string    `json:"recht"`
+	Bereich            string    `json:"bereich"`
+	Risiko             *Risiko   `json:"risiko"`
+	WirktNachAussen    *bool     `json:"wirkt_nach_aussen"`
+	Datenausgang       []string  `json:"datenausgang"`
+	Zugang             *string   `json:"zugang"`
+	Prueft             []string  `json:"prueft"`
+	BrauchtVorpruefung *[]string `json:"braucht_vorpruefung"`
 }
 
 // Lies prüft einen Beipackzettel im JSON-Format.
@@ -122,6 +138,9 @@ func Lies(daten []byte) (Zettel, error) {
 	}
 	if r.Zugang != nil && *r.Fassung < 2 {
 		return Zettel{}, fmt.Errorf("beipackzettel %q: feld \"zugang\" gibt es erst ab fassung 2", r.Name)
+	}
+	if (r.Prueft != nil || r.BrauchtVorpruefung != nil) && *r.Fassung < 3 {
+		return Zettel{}, fmt.Errorf("beipackzettel %q: felder \"prueft\" und \"braucht_vorpruefung\" gibt es erst ab fassung 3", r.Name)
 	}
 	if r.Recht != KeinRecht && strings.TrimSpace(r.Bereich) == "" {
 		return Zettel{}, fmt.Errorf("beipackzettel %q: zu recht %q fehlt der bereich", r.Name, r.Recht)
@@ -162,5 +181,41 @@ func Lies(daten []byte) (Zettel, error) {
 		}
 		z.Zugang = *r.Zugang
 	}
+
+	if len(r.Prueft) > 0 {
+		if len(r.Datenausgang) > 0 {
+			return Zettel{}, fmt.Errorf("beipackzettel %q: wer prüft, darf keine daten hinausgeben", r.Name)
+		}
+		if !enthaelt(r.Ausgaben, FeldMarkierungen) {
+			return Zettel{}, fmt.Errorf("beipackzettel %q: wer prüft, muss %q ausgeben", r.Name, FeldMarkierungen)
+		}
+	}
+	for _, e := range r.Prueft {
+		if !enthaelt(r.Eingaben, e) {
+			return Zettel{}, fmt.Errorf("beipackzettel %q: geprüfte eingabe %q steht nicht bei den eingaben", r.Name, e)
+		}
+	}
+	z.Prueft = r.Prueft
+	switch {
+	case r.BrauchtVorpruefung != nil:
+		for _, e := range *r.BrauchtVorpruefung {
+			if !enthaelt(r.Eingaben, e) {
+				return Zettel{}, fmt.Errorf("beipackzettel %q: vorzuprüfende eingabe %q steht nicht bei den eingaben", r.Name, e)
+			}
+		}
+		z.BrauchtVorpruefung = *r.BrauchtVorpruefung
+	case len(r.Datenausgang) > 0:
+		// Strengster Wert: Alles, was hinausgehen kann, muss geprüft sein.
+		z.BrauchtVorpruefung = r.Eingaben
+	}
 	return z, nil
+}
+
+func enthaelt(liste []string, wert string) bool {
+	for _, w := range liste {
+		if w == wert {
+			return true
+		}
+	}
+	return false
 }
