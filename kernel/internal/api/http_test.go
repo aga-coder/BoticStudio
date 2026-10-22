@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -9,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aga-coder/boticstudio/kernel/internal/auditor"
 	"github.com/aga-coder/boticstudio/kernel/internal/ausfuehrung"
 	"github.com/aga-coder/boticstudio/kernel/internal/beipackzettel"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
@@ -27,17 +27,17 @@ func testServer(t *testing.T) *httptest.Server {
 	if err := k.Fuege(z); err != nil {
 		t.Fatal(err)
 	}
-	p := pfoertner.Neu(pfoertner.StandardEinstellungen(), k, auditor.NeuSpeicher())
+	p := pfoertner.Neu(pfoertner.StandardEinstellungen(), k, pfoertner.NeuerArbeitsspeicher())
 	for _, err := range []error{
-		p.LegeFirmaAn(pfoertner.Firma{ID: "a"}),
-		p.LegePersonAn(pfoertner.Person{ID: "anna", Firma: "a", Rolle: pfoertner.RolleAdmin}),
-		p.ErteileErlaubnis(pfoertner.Erlaubnis{ID: "e", Firma: "a", Recht: "lesen", Bereich: "postfach/x", Dauer: pfoertner.Dauerhaft, ErteiltVon: "anna"}),
+		p.LegeFirmaAn(context.Background(), pfoertner.Firma{ID: "a"}),
+		p.LegePersonAn(context.Background(), pfoertner.Person{ID: "anna", Firma: "a", Rolle: pfoertner.RolleAdmin}),
+		p.ErteileErlaubnis(context.Background(), pfoertner.Erlaubnis{ID: "e", Firma: "a", Recht: "lesen", Bereich: "postfach/x", Dauer: pfoertner.Dauerhaft, ErteiltVon: "anna"}),
 	} {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	f := &ausfuehrung.Ausfuehrer{Pfoertner: p, Katalog: k, Tresor: tresor.NeuSpeicher(), Audit: auditor.NeuSpeicher()}
+	f := &ausfuehrung.Ausfuehrer{Pfoertner: p, Katalog: k, Tresor: tresor.NeuSpeicher()}
 	s := httptest.NewServer(Handler(p, f, slog.New(slog.NewTextHandler(io.Discard, nil))))
 	t.Cleanup(s.Close)
 	return s

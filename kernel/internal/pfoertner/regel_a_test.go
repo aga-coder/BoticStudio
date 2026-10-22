@@ -1,4 +1,4 @@
-package pfoertner
+package pfoertner_test
 
 import (
 	"os"
@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aga-coder/boticstudio/kernel/internal/auditor"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
+	. "github.com/aga-coder/boticstudio/kernel/internal/pfoertner"
 )
 
 // Regel A, Teil 1: Eine ganz neue Fähigkeit funktioniert, sobald ihr
@@ -23,14 +23,14 @@ func TestRegelANeueFaehigkeitOhneCodeAenderung(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := Neu(StandardEinstellungen(), k, auditor.NeuSpeicher())
-	muss(t, p.LegeFirmaAn(Firma{ID: "a"}))
-	muss(t, p.LegePersonAn(Person{ID: "anna", Firma: "a", Rolle: RolleLeitend}))
+	p := Neu(StandardEinstellungen(), k, NeuerArbeitsspeicher())
+	muss(t, p.LegeFirmaAn(ctx, Firma{ID: "a"}))
+	muss(t, p.LegePersonAn(ctx, Person{ID: "anna", Firma: "a", Rolle: RolleLeitend}))
 
 	a := Anfrage{Firma: "a", Person: "anna", Aufgabe: "t1", Faehigkeit: "termine_lesen", Version: "1.0.0", Bereich: "kalender/team"}
-	erwarte(t, p.Pruefe(a), Abgelehnt, "kalender.lesen")
-	muss(t, p.ErteileErlaubnis(Erlaubnis{ID: "k", Firma: "a", Recht: "kalender.lesen", Bereich: "kalender/team", Dauer: Dauerhaft, ErteiltVon: "anna"}))
-	erwarte(t, p.Pruefe(a), Erlaubt, "")
+	erwarte(t, p.Pruefe(ctx, a), Abgelehnt, "kalender.lesen")
+	muss(t, p.ErteileErlaubnis(ctx, Erlaubnis{ID: "k", Firma: "a", Recht: "kalender.lesen", Bereich: "kalender/team", Dauer: Dauerhaft, ErteiltVon: "anna"}))
+	erwarte(t, p.Pruefe(ctx, a), Erlaubt, "")
 }
 
 // Regel A, Teil 2: Im Code des Pförtners steht keine einzelne Fähigkeit.

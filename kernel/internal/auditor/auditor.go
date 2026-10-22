@@ -1,16 +1,18 @@
-// Package auditor schreibt jede Entscheidung des Pförtners mit.
+// Package auditor beschreibt den Audit-Eintrag und seine Hash-Kette.
 //
-// Einträge werden nur angehängt, nie geändert. Jeder Eintrag trägt den
-// Fingerabdruck (SHA-256) des vorherigen. Wird ein Eintrag verändert oder
-// entfernt, fällt das beim Prüfen der Kette sofort auf.
+// Einträge werden nur angehängt, nie geändert. Jede Firma hat ihre eigene
+// Kette: Jeder Eintrag trägt den Fingerabdruck (SHA-256) des vorherigen
+// Eintrags derselben Firma. Wird ein Eintrag verändert oder entfernt, fällt
+// das beim Prüfen der Kette sofort auf. Gespeichert wird die Kette vom
+// Speicher des Pförtners, im selben Vorgang wie die Entscheidung selbst.
 package auditor
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"sync"
 	"time"
 )
 
@@ -25,65 +27,42 @@ type Eintrag struct {
 	Hash       string            `json:"hash"`
 }
 
-// Auditor nimmt Einträge an. Schlägt Schreibe fehl, muss der Aufrufer
-// die Aktion ablehnen.
-type Auditor interface {
-	Schreibe(firma, art string, inhalt map[string]string) (Eintrag, error)
-}
-
-// Speicher ist ein Auditor im Arbeitsspeicher, für Tests und den Start.
-// Später ersetzt ihn ein getrennter, nur anhängender Speicher in PostgreSQL.
-type Speicher struct {
-	mu        sync.Mutex
-	eintraege []Eintrag
-	jetzt     func() time.Time
-}
-
-// NeuSpeicher erstellt einen leeren Audit-Speicher.
-func NeuSpeicher() *Speicher {
-	return &Speicher{jetzt: func() time.Time { return time.Now().UTC() }}
-}
-
-// Schreibe hängt einen Eintrag an die Kette an.
-func (s *Speicher) Schreibe(firma, art string, inhalt map[string]string) (Eintrag, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// Naechster baut den Eintrag, der auf vorher folgt (vorher nil: erster
+// Eintrag der Firma). Die Zeit wird auf Mikrosekunden gekürzt, damit sie
+// in PostgreSQL unverändert gespeichert wird und der Fingerabdruck stimmt.
+func Naechster(vorher *Eintrag, firma, art string, inhalt map[string]string, zeit time.Time) (Eintrag, error) {
+	if firma == "" {
+		return Eintrag{}, errors.New("audit: eintrag ohne firma")
+	}
 	kopie := make(map[string]string, len(inhalt))
 	for k, v := range inhalt {
 		kopie[k] = v
 	}
-	e := Eintrag{
-		Nr:     len(s.eintraege) + 1,
-		Zeit:   s.jetzt(),
-		Firma:  firma,
-		Art:    art,
-		Inhalt: kopie,
-	}
-	if n := len(s.eintraege); n > 0 {
-		e.VorherHash = s.eintraege[n-1].Hash
+	e := Eintrag{Nr: 1, Zeit: zeit.UTC().Truncate(time.Microsecond), Firma: firma, Art: art, Inhalt: kopie}
+	if vorher != nil {
+		if vorher.Firma != firma {
+			return Eintrag{}, errors.New("audit: kette einer anderen firma")
+		}
+		e.Nr = vorher.Nr + 1
+		e.VorherHash = vorher.Hash
 	}
 	h, err := fingerabdruck(e)
 	if err != nil {
 		return Eintrag{}, err
 	}
 	e.Hash = h
-	s.eintraege = append(s.eintraege, e)
 	return e, nil
 }
 
-// Eintraege liefert eine Kopie aller Einträge.
-func (s *Speicher) Eintraege() []Eintrag {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]Eintrag(nil), s.eintraege...)
-}
-
-// PruefeKette prüft, ob die Einträge lückenlos und unverändert sind.
+// PruefeKette prüft, ob die Einträge einer Firma lückenlos und unverändert sind.
 func PruefeKette(eintraege []Eintrag) error {
 	vorher := ""
 	for i, e := range eintraege {
 		if e.Nr != i+1 {
 			return fmt.Errorf("audit: eintrag %d hat nummer %d, es fehlt etwas", i+1, e.Nr)
+		}
+		if i > 0 && e.Firma != eintraege[0].Firma {
+			return fmt.Errorf("audit: eintrag %d gehört zu einer anderen firma", e.Nr)
 		}
 		if e.VorherHash != vorher {
 			return fmt.Errorf("audit: eintrag %d passt nicht zum vorherigen", e.Nr)

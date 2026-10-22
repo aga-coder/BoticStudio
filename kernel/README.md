@@ -16,7 +16,7 @@ Der Pförtner prüft jeden Schritt, den der Orchestrator ausführen möchte, und
 5. Verlassen Daten BoticStudio: Erlaubt der Zettel das Ziel, steht es auf der Liste der Firma, liegt eine Einwilligung vor, und sperrt eine Markierung (z. B. `art9_verdacht`) die Region?
 6. Wirkt es nach außen oder ist es riskant: dann **wartet**.
 
-Jede Entscheidung geht an den Auditor (nur anhängen, Hash-Kette). Kann er nicht schreiben, wird abgelehnt.
+Jede Entscheidung geht an den Auditor (nur anhängen, Hash-Kette je Firma). Kann er nicht schreiben, wird abgelehnt. Entscheidung, Audit-Eintrag und Folgen (z. B. eine einmalige Erlaubnis gilt als verbraucht) werden gemeinsam gespeichert oder gar nicht.
 
 ## Ausführen
 
@@ -28,14 +28,51 @@ Jede Entscheidung geht an den Auditor (nur anhängen, Hash-Kette). Kann er nicht
 4. Steht ein geheimer Wert aus dem Zugang im Ergebnis, wird es zurückgehalten. Fehlermeldungen werden geschwärzt.
 5. Das Audit bekommt nur, was ausgeführt wurde und wie groß das Ergebnis war, nie den Inhalt.
 
+## Datenbank und Mandantentrennung
+
+Ohne Datenbank hält der Pförtner alles im Arbeitsspeicher (zum Ausprobieren). Mit `BOTICSTUDIO_DATENBANK` speichert er in PostgreSQL. Die Trennung der Firmen erzwingt die Datenbank selbst, nicht nur der Go-Code:
+
+- Jede Tabelle hat Row-Level Security mit `FORCE`. Sichtbar und schreibbar ist nur, was zur Firma des laufenden Vorgangs gehört. Ist keine Firma gesetzt, ist nichts sichtbar.
+- Der Pförtner meldet sich als `boticstudio_pfoertner` an: kein Superuser, darf RLS nicht umgehen, ist nicht Eigentümer der Tabellen, darf nichts löschen.
+- Das Audit lässt sich nur anhängen. Ändern, Löschen und Leeren blockiert ein Trigger, auch für den Eigentümer.
+- Die Tests in `internal/datenbank` beweisen das direkt in der Datenbank: Abfragen ohne Filter sehen nur die eigene Firma, Schreiben in eine fremde Firma scheitert, jede Tabelle hat erzwungene Trennung.
+
+Zugangsdaten zur Datenbank kommen nur aus Umgebungsvariablen, nie aus Startparametern (die wären in der Prozessliste sichtbar). Fehlermeldungen enthalten nie das Passwort, auch nicht bei einer kaputten Verbindungsangabe.
+
+| Variable | Wofür |
+| --- | --- |
+| `BOTICSTUDIO_DATENBANK` | Verbindung des Pförtners (Rolle `boticstudio_pfoertner`) |
+| `BOTICSTUDIO_DATENBANK_EIGENTUEMER` | Nur für `cmd/migrieren`, Rolle, der die Tabellen gehören |
+| `BOTICSTUDIO_TEST_DATENBANK` | Nur für Tests. Fehlt sie, werden die PostgreSQL-Tests übersprungen (in CI nicht erlaubt). |
+
+Einrichten (lokal, einmal):
+
+```sh
+# als Datenbank-Admin: Eigentümer anlegen (kein Superuser, sonst gilt RLS nicht)
+psql -c "CREATE ROLE boticstudio_eigentuemer LOGIN CREATEDB CREATEROLE PASSWORD '...'"
+psql -c "CREATE DATABASE boticstudio OWNER boticstudio_eigentuemer"
+
+# Schema anlegen bzw. aktualisieren
+BOTICSTUDIO_DATENBANK_EIGENTUEMER=postgres://boticstudio_eigentuemer:...@localhost/boticstudio go run ./cmd/migrieren
+
+# dem Pförtner das Anmelden erlauben
+psql -c "ALTER ROLE boticstudio_pfoertner LOGIN PASSWORD '...'"
+```
+
 ## Starten und testen
 
 ```sh
 cd kernel
 go test -race ./...
+# mit PostgreSQL-Tests:
+BOTICSTUDIO_TEST_DATENBANK=postgres://boticstudio_eigentuemer:...@localhost/boticstudio_test go test -race ./...
+
+BOTICSTUDIO_DATENBANK=postgres://boticstudio_pfoertner:...@localhost/boticstudio \
 go run ./cmd/pfoertner -katalog ../katalog -testdaten ../testdaten/testfirma.json \
   -module ../testdaten/module.json -tresor ../testdaten/tresor.json
 ```
+
+Ohne `BOTICSTUDIO_DATENBANK` läuft alles im Arbeitsspeicher. Testdaten werden nur geladen, wenn die Firma noch nicht in der Datenbank steht.
 
 `tresor.json` legst du nur lokal an, nach dem Muster `testdaten/tresor.beispiel.json`. Die Datei wird von Git ignoriert.
 
@@ -47,6 +84,6 @@ curl -X POST localhost:8470/v1/pruefen -d '{"firma":"testfirma-mueller","person"
 
 ## Noch nicht dabei
 
-- Speichern in PostgreSQL (Erlaubnisse, Audit) und der echte Tresor (STACKIT Secrets Manager). Bis dahin liegt alles im Arbeitsspeicher.
+- Der echte Tresor (STACKIT Secrets Manager). Bis dahin kommen Zugangsdaten aus einer lokalen Datei.
 - Anmeldung der Aufrufer. Bis dahin hört der Pförtner nur auf `127.0.0.1`. Erlaubnisse vergeben geht bewusst nicht über HTTP.
 - Wartende Schritte speichern und bestätigen (kommt mit Schritt 2, Antwort senden).

@@ -9,15 +9,39 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: nur-fuer-ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Wegwerf-Datenbank nur für diesen Testlauf, kein echtes Geheimnis.
+      BOTICSTUDIO_TEST_DATENBANK: postgres://boticstudio_eigentuemer:nur-fuer-ci@localhost:5432/boticstudio_test?sslmode=disable
     defaults:
       run:
+        shell: bash
         working-directory: kernel
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: kernel/go.mod
+      - name: Eigentümer-Rolle anlegen (kein Superuser, sonst gilt RLS nicht)
+        env:
+          PGPASSWORD: nur-fuer-ci
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE boticstudio_eigentuemer LOGIN CREATEDB CREATEROLE PASSWORD 'nur-fuer-ci'" \
+            -c "CREATE DATABASE boticstudio_test OWNER boticstudio_eigentuemer"
       - name: Format prüfen
         run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      - run: go test -race ./...
+      - name: Tests (mit PostgreSQL)
+        run: |
+          go test -race -count=1 ./...
+          # Die Datenbank-Tests dürfen in CI nicht still übersprungen werden.
+          go test -count=1 -v ./internal/datenbank/ ./internal/pfoertner/ | tee tests.log
+          ! grep -q -- "--- SKIP" tests.log

@@ -3,16 +3,19 @@
 // Regel A: Der Pförtner kennt keine einzelne Fähigkeit. Er vergleicht nur
 // den Beipackzettel aus dem Katalog mit den Erlaubnissen und der Zielliste
 // der Firma. Er plant nichts, wählt kein Modell und keine Fähigkeit.
+//
+// Gespeichert wird über einen Speicher (Arbeitsspeicher oder PostgreSQL).
+// Jede Prüfung ist ein Vorgang: Entscheidung, Audit-Eintrag und die
+// Änderungen daraus werden gemeinsam gespeichert oder gar nicht.
 package pfoertner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/aga-coder/boticstudio/kernel/internal/auditor"
 	"github.com/aga-coder/boticstudio/kernel/internal/beipackzettel"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
 )
@@ -23,9 +26,11 @@ type Einstellungen struct {
 	MaxSchritte int
 	// Sperren gelten für alle Firmen.
 	Sperren []Sperre
+	// Uhr liefert die aktuelle Zeit. Leer heißt: Systemzeit.
+	Uhr func() time.Time
 }
 
-// StandardEinstellungen sind die Werte für Stufe 1.
+// StandardEinstellungen sind die Werte für den Start.
 func StandardEinstellungen() Einstellungen {
 	return Einstellungen{
 		MaxSchritte: 1000,
@@ -33,91 +38,75 @@ func StandardEinstellungen() Einstellungen {
 	}
 }
 
-type aufgabe struct {
-	gestoppt  bool
-	schritte  int
-	versionen map[string]string // Fähigkeit -> Version, für die Dauer der Aufgabe fest
-}
-
 // Pfoertner prüft Anfragen. Er ist sicher für gleichzeitige Zugriffe.
 type Pfoertner struct {
-	mu          sync.Mutex
-	einst       Einstellungen
-	katalog     *katalog.Katalog
-	audit       auditor.Auditor
-	jetzt       func() time.Time
-	firmen      map[string]Firma
-	personen    map[string]Person
-	erlaubnisse map[string]*Erlaubnis
-	aufgaben    map[string]*aufgabe
+	einst    Einstellungen
+	katalog  *katalog.Katalog
+	speicher Speicher
 }
 
 // Neu erstellt einen Pförtner.
-func Neu(einst Einstellungen, k *katalog.Katalog, a auditor.Auditor) *Pfoertner {
-	return &Pfoertner{
-		einst:       einst,
-		katalog:     k,
-		audit:       a,
-		jetzt:       func() time.Time { return time.Now().UTC() },
-		firmen:      map[string]Firma{},
-		personen:    map[string]Person{},
-		erlaubnisse: map[string]*Erlaubnis{},
-		aufgaben:    map[string]*aufgabe{},
+func Neu(einst Einstellungen, k *katalog.Katalog, s Speicher) *Pfoertner {
+	if einst.Uhr == nil {
+		einst.Uhr = time.Now
 	}
+	return &Pfoertner{einst: einst, katalog: k, speicher: s}
 }
 
+func (p *Pfoertner) jetzt() time.Time { return p.einst.Uhr().UTC() }
+
 // LegeFirmaAn trägt eine Firma ein. Personen und Ziele gehören immer zu genau einer Firma.
-func (p *Pfoertner) LegeFirmaAn(f Firma) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (p *Pfoertner) LegeFirmaAn(ctx context.Context, f Firma) error {
 	if f.ID == "" {
 		return errors.New("firma ohne id")
-	}
-	if _, da := p.firmen[f.ID]; da {
-		return fmt.Errorf("firma %q gibt es schon", f.ID)
 	}
 	for _, z := range f.Ziele {
 		if z.Region != RegionEU && z.EinwilligungVon == "" {
 			return fmt.Errorf("ziel %s/%s liegt nicht sicher in der eu und braucht eine einwilligung", z.Art, z.Adresse)
 		}
 	}
-	p.firmen[f.ID] = f
-	return p.schreibe(f.ID, "firma_angelegt", map[string]string{"firma": f.ID})
+	return p.speicher.Vorgang(ctx, f.ID, func(v Vorgang) error {
+		if _, da, err := v.Firma(); err != nil {
+			return err
+		} else if da {
+			return fmt.Errorf("%w: firma %q", ErrGibtEsSchon, f.ID)
+		}
+		if err := v.LegeFirmaAn(f); err != nil {
+			return err
+		}
+		return schreibe(v, "firma_angelegt", map[string]string{"firma": f.ID})
+	})
 }
 
 // LegePersonAn trägt eine Person in ihre Firma ein.
-func (p *Pfoertner) LegePersonAn(pe Person) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if _, ok := p.firmen[pe.Firma]; !ok {
-		return fmt.Errorf("firma %q unbekannt", pe.Firma)
-	}
+func (p *Pfoertner) LegePersonAn(ctx context.Context, pe Person) error {
 	switch pe.Rolle {
 	case RolleAdmin, RolleLeitend, RolleAusfuehrend:
 	default:
 		return fmt.Errorf("unbekannte rolle %q", pe.Rolle)
 	}
-	if _, da := p.personen[pe.ID]; da || pe.ID == "" {
-		return fmt.Errorf("person %q ungültig oder schon vorhanden", pe.ID)
+	if pe.ID == "" || pe.Firma == "" {
+		return errors.New("person braucht id und firma")
 	}
-	p.personen[pe.ID] = pe
-	return p.schreibe(pe.Firma, "person_angelegt", map[string]string{"person": pe.ID, "rolle": string(pe.Rolle)})
+	return p.speicher.Vorgang(ctx, pe.Firma, func(v Vorgang) error {
+		if _, da, err := v.Firma(); err != nil || !da {
+			return errors.Join(err, fmt.Errorf("firma %q unbekannt", pe.Firma))
+		}
+		if _, da, err := v.Person(pe.ID); err != nil || da {
+			return errors.Join(err, fmt.Errorf("person %q gibt es schon", pe.ID))
+		}
+		if err := v.LegePersonAn(pe); err != nil {
+			return err
+		}
+		return schreibe(v, "person_angelegt", map[string]string{"person": pe.ID, "rolle": string(pe.Rolle)})
+	})
 }
 
 // ErteileErlaubnis vergibt ein Recht. Nur Admin und Leitende ihrer eigenen
 // Firma dürfen das, nie die KI (Grundregel 1).
-func (p *Pfoertner) ErteileErlaubnis(e Erlaubnis) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	geber, ok := p.personen[e.ErteiltVon]
-	if !ok || geber.Firma != e.Firma {
-		return fmt.Errorf("%q darf in firma %q keine erlaubnis erteilen", e.ErteiltVon, e.Firma)
-	}
-	if !geber.Rolle.DarfFreigeben() {
-		return fmt.Errorf("rolle %q darf keine erlaubnis erteilen", geber.Rolle)
-	}
-	if e.ID == "" || p.erlaubnisse[e.ID] != nil {
-		return fmt.Errorf("erlaubnis-id %q ungültig oder schon vergeben", e.ID)
+func (p *Pfoertner) ErteileErlaubnis(ctx context.Context, e Erlaubnis) error {
+	if e.ID == "" || e.Firma == "" {
+		return errors.New("erlaubnis braucht id und firma")
 	}
 	if e.Recht == "" || e.Recht == beipackzettel.KeinRecht || len(pfad(e.Bereich)) == 0 {
 		return errors.New("erlaubnis braucht recht und bereich")
@@ -125,106 +114,168 @@ func (p *Pfoertner) ErteileErlaubnis(e Erlaubnis) error {
 	if e.Dauer != Einmalig && e.Dauer != Dauerhaft {
 		return fmt.Errorf("unbekannte dauer %q", e.Dauer)
 	}
-	for _, id := range e.Fuer {
-		if pe, ok := p.personen[id]; !ok || pe.Firma != e.Firma {
-			return fmt.Errorf("person %q gehört nicht zu firma %q", id, e.Firma)
+	return p.speicher.Vorgang(ctx, e.Firma, func(v Vorgang) error {
+		geber, ok, err := v.Person(e.ErteiltVon)
+		if err != nil {
+			return err
 		}
-	}
-	e.ErteiltAm = p.jetzt()
-	e.Verbraucht, e.Widerrufen = false, false
-	if err := p.schreibe(e.Firma, "erlaubnis_erteilt", map[string]string{
-		"erlaubnis": e.ID, "recht": e.Recht, "bereich": e.Bereich, "dauer": string(e.Dauer),
-		"fuer": strings.Join(e.Fuer, ","), "erteilt_von": e.ErteiltVon,
-	}); err != nil {
-		return err
-	}
-	p.erlaubnisse[e.ID] = &e
-	return nil
+		if !ok {
+			return fmt.Errorf("%q darf in firma %q keine erlaubnis erteilen", e.ErteiltVon, e.Firma)
+		}
+		if !geber.Rolle.DarfFreigeben() {
+			return fmt.Errorf("rolle %q darf keine erlaubnis erteilen", geber.Rolle)
+		}
+		if _, da, err := v.Erlaubnis(e.ID); err != nil || da {
+			return errors.Join(err, fmt.Errorf("erlaubnis-id %q schon vergeben", e.ID))
+		}
+		for _, id := range e.Fuer {
+			if _, ok, err := v.Person(id); err != nil || !ok {
+				return errors.Join(err, fmt.Errorf("person %q gehört nicht zu firma %q", id, e.Firma))
+			}
+		}
+		e.ErteiltAm = p.jetzt()
+		e.Verbraucht, e.Widerrufen = false, false
+		if err := v.SpeichereErlaubnis(e); err != nil {
+			return err
+		}
+		return schreibe(v, "erlaubnis_erteilt", map[string]string{
+			"erlaubnis": e.ID, "recht": e.Recht, "bereich": e.Bereich, "dauer": string(e.Dauer),
+			"fuer": strings.Join(e.Fuer, ","), "erteilt_von": e.ErteiltVon,
+		})
+	})
 }
 
 // Widerrufe nimmt eine Erlaubnis zurück.
-func (p *Pfoertner) Widerrufe(firma, erlaubnisID, personID string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	pe, ok := p.personen[personID]
-	e := p.erlaubnisse[erlaubnisID]
-	if !ok || pe.Firma != firma || !pe.Rolle.DarfFreigeben() || e == nil || e.Firma != firma {
-		return errors.New("widerruf nicht möglich")
-	}
-	if err := p.schreibe(firma, "erlaubnis_widerrufen", map[string]string{"erlaubnis": erlaubnisID, "von": personID}); err != nil {
-		return err
-	}
-	e.Widerrufen = true
-	return nil
+func (p *Pfoertner) Widerrufe(ctx context.Context, firma, erlaubnisID, personID string) error {
+	return p.speicher.Vorgang(ctx, firma, func(v Vorgang) error {
+		pe, ok, err := v.Person(personID)
+		if err != nil {
+			return err
+		}
+		e, da, err := v.Erlaubnis(erlaubnisID)
+		if err != nil {
+			return err
+		}
+		if !ok || !pe.Rolle.DarfFreigeben() || !da {
+			return errors.New("widerruf nicht möglich")
+		}
+		e.Widerrufen = true
+		if err := v.SpeichereErlaubnis(e); err != nil {
+			return err
+		}
+		return schreibe(v, "erlaubnis_widerrufen", map[string]string{"erlaubnis": erlaubnisID, "von": personID})
+	})
 }
 
 // Stoppe hält eine Aufgabe an. Danach wird jeder weitere Schritt abgelehnt.
-func (p *Pfoertner) Stoppe(firma, aufgabeID, personID string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if pe, ok := p.personen[personID]; !ok || pe.Firma != firma {
-		return errors.New("stopp nur durch eine person der eigenen firma")
+func (p *Pfoertner) Stoppe(ctx context.Context, firma, aufgabeID, personID string) error {
+	if aufgabeID == "" {
+		return errors.New("aufgabe fehlt")
 	}
-	if err := p.schreibe(firma, "aufgabe_gestoppt", map[string]string{"aufgabe": aufgabeID, "von": personID}); err != nil {
-		return err
-	}
-	p.aufgabeVon(firma, aufgabeID).gestoppt = true
-	return nil
+	return p.speicher.Vorgang(ctx, firma, func(v Vorgang) error {
+		if _, ok, err := v.Person(personID); err != nil || !ok {
+			return errors.Join(err, errors.New("stopp nur durch eine person der eigenen firma"))
+		}
+		a, err := v.Aufgabe(aufgabeID)
+		if err != nil {
+			return err
+		}
+		a.Gestoppt = true
+		if err := v.SpeichereAufgabe(aufgabeID, a); err != nil {
+			return err
+		}
+		return schreibe(v, "aufgabe_gestoppt", map[string]string{"aufgabe": aufgabeID, "von": personID})
+	})
 }
 
-// Pruefe entscheidet über einen Schritt. Jede Entscheidung geht an den
-// Auditor. Kann er nicht schreiben, wird abgelehnt.
-func (p *Pfoertner) Pruefe(a Anfrage) Entscheidung {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+// Vermerke schreibt einen Eintrag ins Audit der Firma, z. B. nach einer Ausführung.
+func (p *Pfoertner) Vermerke(ctx context.Context, firma, art string, inhalt map[string]string) error {
+	return p.speicher.Vorgang(ctx, firma, func(v Vorgang) error {
+		return schreibe(v, art, inhalt)
+	})
+}
 
-	ent, anwenden := p.entscheide(a)
-
-	inhalt := map[string]string{
-		"person": a.Person, "aufgabe": a.Aufgabe, "faehigkeit": a.Faehigkeit + "@" + a.Version,
-		"bereich": a.Bereich, "ergebnis": string(ent.Ergebnis), "grund": ent.Grund,
-		"erlaubnis": ent.ErlaubnisID, "markierungen": strings.Join(a.Markierungen, ","),
+// Pruefe entscheidet über einen Schritt. Jede Entscheidung geht ins Audit.
+// Kann das Audit nicht geschrieben werden, wird abgelehnt und nichts geändert.
+func (p *Pfoertner) Pruefe(ctx context.Context, a Anfrage) Entscheidung {
+	if a.Firma == "" || a.Person == "" || a.Aufgabe == "" || a.Faehigkeit == "" || a.Version == "" {
+		// Ohne Firma gibt es keine Kette, in die das gehört. Abgelehnt wird trotzdem.
+		return Entscheidung{Ergebnis: Abgelehnt, Grund: "Anfrage unvollständig: Firma, Person, Aufgabe, Fähigkeit und Version sind Pflicht."}
 	}
-	if a.Ziel != nil {
-		inhalt["ziel"] = a.Ziel.Art + "/" + a.Ziel.Adresse
-	}
-	e, err := p.audit.Schreibe(a.Firma, "pruefung", inhalt)
-	if err != nil {
+	var ent Entscheidung
+	err := p.speicher.Vorgang(ctx, a.Firma, func(v Vorgang) error {
+		var anwenden func() error
+		var err error
+		ent, anwenden, err = p.entscheide(v, a)
+		if err != nil {
+			return err
+		}
+		inhalt := map[string]string{
+			"person": a.Person, "aufgabe": a.Aufgabe, "faehigkeit": a.Faehigkeit + "@" + a.Version,
+			"bereich": a.Bereich, "ergebnis": string(ent.Ergebnis), "grund": ent.Grund,
+			"erlaubnis": ent.ErlaubnisID, "markierungen": strings.Join(a.Markierungen, ","),
+		}
+		if a.Ziel != nil {
+			inhalt["ziel"] = a.Ziel.Art + "/" + a.Ziel.Adresse
+		}
+		e, err := v.Schreibe("pruefung", inhalt)
+		if err != nil {
+			return errAudit
+		}
+		ent.AuditNr = e.Nr
+		if anwenden != nil {
+			return anwenden()
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errAudit):
 		return Entscheidung{Ergebnis: Abgelehnt, Grund: "Der Auditor kann gerade nicht schreiben. Ohne Aufzeichnung keine Aktion."}
-	}
-	ent.AuditNr = e.Nr
-	if anwenden != nil {
-		anwenden()
+	case errors.Is(err, errFirmaUnbekannt):
+		return Entscheidung{Ergebnis: Abgelehnt, Grund: "Firma unbekannt."}
+	case err != nil:
+		return Entscheidung{Ergebnis: Abgelehnt, Grund: "Der Speicher ist gerade nicht erreichbar. Ohne Aufzeichnung keine Aktion."}
 	}
 	return ent
 }
 
+var (
+	errAudit          = errors.New("audit nicht geschrieben")
+	errFirmaUnbekannt = errors.New("firma unbekannt")
+)
+
 // entscheide trifft die Entscheidung, ohne etwas zu verändern. Was sich bei
 // "erlaubt" ändern muss, kommt als Funktion zurück und läuft erst, wenn
-// der Auditor geschrieben hat.
-func (p *Pfoertner) entscheide(a Anfrage) (Entscheidung, func()) {
-	nein := func(grund string, args ...any) (Entscheidung, func()) {
-		return Entscheidung{Ergebnis: Abgelehnt, Grund: fmt.Sprintf(grund, args...)}, nil
+// der Audit-Eintrag geschrieben ist.
+func (p *Pfoertner) entscheide(v Vorgang, a Anfrage) (Entscheidung, func() error, error) {
+	nein := func(grund string, args ...any) (Entscheidung, func() error, error) {
+		return Entscheidung{Ergebnis: Abgelehnt, Grund: fmt.Sprintf(grund, args...)}, nil, nil
 	}
 
 	// 1. Wer fragt?
-	if a.Firma == "" || a.Person == "" || a.Aufgabe == "" || a.Faehigkeit == "" || a.Version == "" {
-		return nein("Anfrage unvollständig: Firma, Person, Aufgabe, Fähigkeit und Version sind Pflicht.")
+	firma, ok, err := v.Firma()
+	if err != nil {
+		return Entscheidung{}, nil, err
 	}
-	if _, ok := p.firmen[a.Firma]; !ok {
-		return nein("Firma unbekannt.")
+	if !ok {
+		// Eine unbekannte Firma hat keine Audit-Kette, also kein Eintrag.
+		return Entscheidung{}, nil, errFirmaUnbekannt
 	}
-	person, ok := p.personen[a.Person]
-	if !ok || person.Firma != a.Firma {
+	if _, ok, err := v.Person(a.Person); err != nil {
+		return Entscheidung{}, nil, err
+	} else if !ok {
 		return nein("Person gehört nicht zu dieser Firma.")
 	}
 
 	// 2. Läuft die Aufgabe noch?
-	auf := p.aufgaben[schluessel(a.Firma, a.Aufgabe)]
-	if auf != nil && auf.gestoppt {
+	auf, err := v.Aufgabe(a.Aufgabe)
+	if err != nil {
+		return Entscheidung{}, nil, err
+	}
+	if auf.Gestoppt {
 		return nein("Die Aufgabe wurde gestoppt.")
 	}
-	if auf != nil && auf.schritte >= p.einst.MaxSchritte {
+	if auf.Schritte >= p.einst.MaxSchritte {
 		return nein("Die Aufgabe hat die Obergrenze von %d Schritten erreicht.", p.einst.MaxSchritte)
 	}
 
@@ -233,10 +284,8 @@ func (p *Pfoertner) entscheide(a Anfrage) (Entscheidung, func()) {
 	if !ok {
 		return nein("Fähigkeit %s@%s steht nicht im Katalog.", a.Faehigkeit, a.Version)
 	}
-	if auf != nil {
-		if v, da := auf.versionen[z.Name]; da && v != z.Version {
-			return nein("Diese Aufgabe nutzt %s in Version %s und bleibt dabei.", z.Name, v)
-		}
+	if ver, da := auf.Versionen[z.Name]; da && ver != z.Version {
+		return nein("Diese Aufgabe nutzt %s in Version %s und bleibt dabei.", z.Name, ver)
 	}
 
 	// 4. Gibt es eine passende Erlaubnis?
@@ -245,7 +294,11 @@ func (p *Pfoertner) entscheide(a Anfrage) (Entscheidung, func()) {
 		if len(pfad(a.Bereich)) == 0 {
 			return nein("Für %s fehlt der Bereich (%s).", z.Recht, z.Bereich)
 		}
-		erl = p.findeErlaubnis(a.Firma, a.Person, z.Recht, a.Bereich)
+		kandidaten, err := v.Erlaubnisse(z.Recht)
+		if err != nil {
+			return Entscheidung{}, nil, err
+		}
+		erl = p.findeErlaubnis(kandidaten, a.Person, a.Bereich)
 		if erl == nil {
 			return nein("Es fehlt die Erlaubnis %q für %s.", z.Recht, a.Bereich)
 		}
@@ -253,7 +306,7 @@ func (p *Pfoertner) entscheide(a Anfrage) (Entscheidung, func()) {
 
 	// 5. Verlassen Daten BoticStudio?
 	if a.Ziel != nil {
-		if grund := p.pruefeZiel(a, z); grund != "" {
+		if grund := p.pruefeZiel(firma, a, z); grund != "" {
 			return nein("%s", grund)
 		}
 	}
@@ -264,29 +317,37 @@ func (p *Pfoertner) entscheide(a Anfrage) (Entscheidung, func()) {
 		if erl != nil {
 			ent.ErlaubnisID = erl.ID
 		}
-		return ent, nil
+		return ent, nil, nil
 	}
 
 	ent := Entscheidung{Ergebnis: Erlaubt, Grund: "Erlaubt."}
 	if erl != nil {
 		ent.ErlaubnisID = erl.ID
 	}
-	return ent, func() {
-		aa := p.aufgabeVon(a.Firma, a.Aufgabe)
-		aa.schritte++
-		aa.versionen[z.Name] = z.Version
+	return ent, func() error {
+		auf.Schritte++
+		if auf.Versionen == nil {
+			auf.Versionen = map[string]string{}
+		}
+		auf.Versionen[z.Name] = z.Version
+		if err := v.SpeichereAufgabe(a.Aufgabe, auf); err != nil {
+			return err
+		}
 		if erl != nil && erl.Dauer == Einmalig {
 			erl.Verbraucht = true
+			return v.SpeichereErlaubnis(*erl)
 		}
-	}
+		return nil
+	}, nil
 }
 
-func (p *Pfoertner) findeErlaubnis(firma, person, recht, bereich string) *Erlaubnis {
+func (p *Pfoertner) findeErlaubnis(kandidaten []Erlaubnis, person, bereich string) *Erlaubnis {
 	jetzt := p.jetzt()
 	gewuenscht := pfad(bereich)
 	var beste *Erlaubnis
-	for _, e := range p.erlaubnisse {
-		if e.Firma != firma || e.Recht != recht || e.Widerrufen || e.Verbraucht {
+	for i := range kandidaten {
+		e := &kandidaten[i]
+		if e.Widerrufen || e.Verbraucht {
 			continue
 		}
 		if !e.GueltigBis.IsZero() && !jetzt.Before(e.GueltigBis) {
@@ -307,7 +368,7 @@ func (p *Pfoertner) findeErlaubnis(firma, person, recht, bereich string) *Erlaub
 	return beste
 }
 
-func (p *Pfoertner) pruefeZiel(a Anfrage, z beipackzettel.Zettel) string {
+func (p *Pfoertner) pruefeZiel(firma Firma, a Anfrage, z beipackzettel.Zettel) string {
 	if a.Ziel.Art == "" || a.Ziel.Adresse == "" {
 		return "Ziel unvollständig."
 	}
@@ -315,9 +376,9 @@ func (p *Pfoertner) pruefeZiel(a Anfrage, z beipackzettel.Zettel) string {
 		return fmt.Sprintf("Laut Beipackzettel sendet %s keine Daten an %q.", z.Name, a.Ziel.Art)
 	}
 	var fz *FreigegebenesZiel
-	for i, kandidat := range p.firmen[a.Firma].Ziele {
+	for i, kandidat := range firma.Ziele {
 		if kandidat.Ziel == *a.Ziel {
-			fz = &p.firmen[a.Firma].Ziele[i]
+			fz = &firma.Ziele[i]
 			break
 		}
 	}
@@ -339,25 +400,12 @@ func (p *Pfoertner) pruefeZiel(a Anfrage, z beipackzettel.Zettel) string {
 	return ""
 }
 
-func (p *Pfoertner) aufgabeVon(firma, id string) *aufgabe {
-	k := schluessel(firma, id)
-	a := p.aufgaben[k]
-	if a == nil {
-		a = &aufgabe{versionen: map[string]string{}}
-		p.aufgaben[k] = a
-	}
-	return a
-}
-
-func (p *Pfoertner) schreibe(firma, art string, inhalt map[string]string) error {
-	if _, err := p.audit.Schreibe(firma, art, inhalt); err != nil {
+func schreibe(v Vorgang, art string, inhalt map[string]string) error {
+	if _, err := v.Schreibe(art, inhalt); err != nil {
 		return fmt.Errorf("auditor: %w", err)
 	}
 	return nil
 }
-
-// schluessel trennt Aufgaben verschiedener Firmen, auch bei gleicher ID.
-func schluessel(firma, aufgabe string) string { return firma + "\x00" + aufgabe }
 
 // pfad zerlegt einen Bereich in Teile. Leere Teile, "." und ".." sind
 // nicht erlaubt, damit niemand aus seinem Bereich herausklettert.

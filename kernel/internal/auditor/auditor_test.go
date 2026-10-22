@@ -1,15 +1,27 @@
 package auditor
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-func TestKetteErkenntVeraenderung(t *testing.T) {
-	s := NeuSpeicher()
-	for _, art := range []string{"eins", "zwei", "drei"} {
-		if _, err := s.Schreibe("a", art, map[string]string{"x": art}); err != nil {
+func kette(t *testing.T, firma string, arten ...string) []Eintrag {
+	t.Helper()
+	var alle []Eintrag
+	var vorher *Eintrag
+	for _, art := range arten {
+		e, err := Naechster(vorher, firma, art, map[string]string{"x": art}, time.Now())
+		if err != nil {
 			t.Fatal(err)
 		}
+		alle = append(alle, e)
+		vorher = &alle[len(alle)-1]
 	}
-	e := s.Eintraege()
+	return alle
+}
+
+func TestKetteErkenntVeraenderung(t *testing.T) {
+	e := kette(t, "a", "eins", "zwei", "drei")
 	if err := PruefeKette(e); err != nil {
 		t.Fatal(err)
 	}
@@ -20,20 +32,33 @@ func TestKetteErkenntVeraenderung(t *testing.T) {
 		t.Fatal("veränderter inhalt nicht erkannt")
 	}
 
-	luecke := []Eintrag{e[0], e[2]}
-	if PruefeKette(luecke) == nil {
+	if PruefeKette([]Eintrag{e[0], e[2]}) == nil {
 		t.Fatal("fehlender eintrag nicht erkannt")
 	}
 }
 
+func TestJedeFirmaHatEigeneKette(t *testing.T) {
+	a := kette(t, "a", "eins")
+	b := kette(t, "b", "eins")
+	if a[0].Nr != 1 || b[0].Nr != 1 || b[0].VorherHash != "" {
+		t.Fatal("ketten nicht getrennt")
+	}
+	if _, err := Naechster(&a[0], "b", "zwei", nil, time.Now()); err == nil {
+		t.Fatal("eintrag an kette einer anderen firma gehängt")
+	}
+	if PruefeKette([]Eintrag{a[0], b[0]}) == nil {
+		t.Fatal("gemischte kette nicht erkannt")
+	}
+}
+
 func TestEintragIstKopie(t *testing.T) {
-	s := NeuSpeicher()
 	inhalt := map[string]string{"x": "1"}
-	if _, err := s.Schreibe("a", "art", inhalt); err != nil {
+	e, err := Naechster(nil, "a", "art", inhalt, time.Now())
+	if err != nil {
 		t.Fatal(err)
 	}
 	inhalt["x"] = "2"
-	if err := PruefeKette(s.Eintraege()); err != nil {
+	if err := PruefeKette([]Eintrag{e}); err != nil {
 		t.Fatal("nachträgliche änderung am aufrufer hat das audit verändert:", err)
 	}
 }
