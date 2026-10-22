@@ -37,8 +37,10 @@ func (m *falschesModul) Rufe(_ context.Context, _, werkzeug string, args map[str
 type umgebung struct {
 	f     *Ausfuehrer
 	modul *falschesModul
-	audit *auditor.Speicher
+	audit *pfoertner.Arbeitsspeicher
 }
+
+var ctx = context.Background()
 
 func neueUmgebung(t *testing.T) *umgebung {
 	t.Helper()
@@ -56,16 +58,16 @@ func neueUmgebung(t *testing.T) *umgebung {
 			t.Fatal(err)
 		}
 	}
-	audit := auditor.NeuSpeicher()
+	audit := pfoertner.NeuerArbeitsspeicher()
 	p := pfoertner.Neu(pfoertner.StandardEinstellungen(), k, audit)
 	for _, err := range []error{
-		p.LegeFirmaAn(pfoertner.Firma{ID: "a"}),
-		p.LegeFirmaAn(pfoertner.Firma{ID: "b"}),
-		p.LegePersonAn(pfoertner.Person{ID: "anna", Firma: "a", Rolle: pfoertner.RolleAdmin}),
-		p.LegePersonAn(pfoertner.Person{ID: "bea", Firma: "b", Rolle: pfoertner.RolleAdmin}),
-		p.ErteileErlaubnis(pfoertner.Erlaubnis{ID: "e", Firma: "a", Recht: "lesen", Bereich: "postfach/info@a.de", Dauer: pfoertner.Dauerhaft, ErteiltVon: "anna"}),
-		p.ErteileErlaubnis(pfoertner.Erlaubnis{ID: "f", Firma: "a", Recht: "lesen", Bereich: "postfach/leer@a.de", Dauer: pfoertner.Dauerhaft, ErteiltVon: "anna"}),
-		p.ErteileErlaubnis(pfoertner.Erlaubnis{ID: "g", Firma: "b", Recht: "lesen", Bereich: "postfach/info@a.de", Dauer: pfoertner.Dauerhaft, ErteiltVon: "bea"}),
+		p.LegeFirmaAn(ctx, pfoertner.Firma{ID: "a"}),
+		p.LegeFirmaAn(ctx, pfoertner.Firma{ID: "b"}),
+		p.LegePersonAn(ctx, pfoertner.Person{ID: "anna", Firma: "a", Rolle: pfoertner.RolleAdmin}),
+		p.LegePersonAn(ctx, pfoertner.Person{ID: "bea", Firma: "b", Rolle: pfoertner.RolleAdmin}),
+		p.ErteileErlaubnis(ctx, pfoertner.Erlaubnis{ID: "e", Firma: "a", Recht: "lesen", Bereich: "postfach/info@a.de", Dauer: pfoertner.Dauerhaft, ErteiltVon: "anna"}),
+		p.ErteileErlaubnis(ctx, pfoertner.Erlaubnis{ID: "f", Firma: "a", Recht: "lesen", Bereich: "postfach/leer@a.de", Dauer: pfoertner.Dauerhaft, ErteiltVon: "anna"}),
+		p.ErteileErlaubnis(ctx, pfoertner.Erlaubnis{ID: "g", Firma: "b", Recht: "lesen", Bereich: "postfach/info@a.de", Dauer: pfoertner.Dauerhaft, ErteiltVon: "bea"}),
 	} {
 		if err != nil {
 			t.Fatal(err)
@@ -75,7 +77,7 @@ func neueUmgebung(t *testing.T) *umgebung {
 	tr.Lege("a", "postfach/info@a.de", tresor.NeuGeheimnis(`{"server":"imap.a.de","benutzer":"info@a.de","passwort":"`+passwort+`"}`))
 	m := &falschesModul{antwort: `{"mails":[]}`}
 	return &umgebung{
-		f: &Ausfuehrer{Pfoertner: p, Katalog: k, Tresor: tr, Audit: audit, Aufrufer: m,
+		f: &Ausfuehrer{Pfoertner: p, Katalog: k, Tresor: tr, Aufrufer: m,
 			Module: map[string]string{"lesen@1": "http://lesen", "zaehlen@1": "http://zaehlen"}},
 		modul: m, audit: audit,
 	}
@@ -102,13 +104,13 @@ func TestErlaubtFuehrtAusMitZugang(t *testing.T) {
 		t.Fatal("zugang nicht ans modul gegeben")
 	}
 	// Im Audit steht kein Passwort.
-	for _, e := range u.audit.Eintraege() {
+	for _, e := range u.audit.Audit("a") {
 		roh, _ := json.Marshal(e)
 		if strings.Contains(string(roh), passwort) {
 			t.Fatalf("passwort im audit: %s", roh)
 		}
 	}
-	if err := auditor.PruefeKette(u.audit.Eintraege()); err != nil {
+	if err := auditor.PruefeKette(u.audit.Audit("a")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -173,7 +175,7 @@ func TestFehlerDesModulsWirdGeschwaerzt(t *testing.T) {
 	if strings.Contains(antwort.Fehler, passwort) || !strings.Contains(antwort.Fehler, tresor.Verdeckt) {
 		t.Fatalf("fehler nicht geschwärzt: %q", antwort.Fehler)
 	}
-	for _, e := range u.audit.Eintraege() {
+	for _, e := range u.audit.Audit("a") {
 		roh, _ := json.Marshal(e)
 		if strings.Contains(string(roh), passwort) {
 			t.Fatalf("passwort im audit: %s", roh)

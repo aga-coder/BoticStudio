@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aga-coder/boticstudio/kernel/internal/auditor"
 	"github.com/aga-coder/boticstudio/kernel/internal/beipackzettel"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
 	"github.com/aga-coder/boticstudio/kernel/internal/pfoertner"
@@ -55,7 +54,6 @@ type Ausfuehrer struct {
 	Pfoertner *pfoertner.Pfoertner
 	Katalog   *katalog.Katalog
 	Tresor    tresor.Tresor
-	Audit     auditor.Auditor
 	Aufrufer  Aufrufer
 	// Module ordnet "name@version" der Adresse des Moduls zu.
 	Module map[string]string
@@ -73,7 +71,7 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 		}
 	}
 
-	ent := f.Pfoertner.Pruefe(a)
+	ent := f.Pfoertner.Pruefe(ctx, a)
 	antwort := Antwort{Entscheidung: ent}
 	if ent.Ergebnis != pfoertner.Erlaubt {
 		return antwort, nil
@@ -91,7 +89,7 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 	if z.Zugang != "" {
 		zugang, werte, err := f.holeZugang(a.Firma, z.Zugang, a.Bereich)
 		if err != nil {
-			return f.fehler(antwort, a, "Zugangsdaten fehlen für diesen Bereich.", err.Error(), nil), nil
+			return f.fehler(ctx, antwort, a, "Zugangsdaten fehlen für diesen Bereich.", err.Error(), nil), nil
 		}
 		args[FeldZugang] = zugang
 		geheim = werte
@@ -99,25 +97,25 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 
 	adresse, ok := f.Module[z.Schluessel()]
 	if !ok {
-		return f.fehler(antwort, a, "Das Modul dieser Fähigkeit ist nicht eingerichtet.", "kein modul für "+z.Schluessel(), nil), nil
+		return f.fehler(ctx, antwort, a, "Das Modul dieser Fähigkeit ist nicht eingerichtet.", "kein modul für "+z.Schluessel(), nil), nil
 	}
 
 	limit := f.Zeitlimit
 	if limit <= 0 {
 		limit = 60 * time.Second
 	}
-	ctx, abbrechen := context.WithTimeout(ctx, limit)
+	aufrufCtx, abbrechen := context.WithTimeout(ctx, limit)
 	defer abbrechen()
 
-	ergebnis, err := f.Aufrufer.Rufe(ctx, adresse, z.Name, args)
+	ergebnis, err := f.Aufrufer.Rufe(aufrufCtx, adresse, z.Name, args)
 	if err != nil {
-		return f.fehler(antwort, a, "Die Fähigkeit hat einen Fehler gemeldet: "+schwaerze(err.Error(), geheim), err.Error(), geheim), nil
+		return f.fehler(ctx, antwort, a, "Die Fähigkeit hat einen Fehler gemeldet: "+schwaerze(err.Error(), geheim), err.Error(), geheim), nil
 	}
 	if enthaeltGeheimnis(string(ergebnis), geheim) {
-		return f.fehler(antwort, a, "Das Ergebnis enthielt Zugangsdaten und wurde zurückgehalten.", "geheimnis im ergebnis", nil), nil
+		return f.fehler(ctx, antwort, a, "Das Ergebnis enthielt Zugangsdaten und wurde zurückgehalten.", "geheimnis im ergebnis", nil), nil
 	}
 
-	if _, err := f.Audit.Schreibe(a.Firma, "ausgefuehrt", map[string]string{
+	if err := f.Pfoertner.Vermerke(ctx, a.Firma, "ausgefuehrt", map[string]string{
 		"aufgabe": a.Aufgabe, "faehigkeit": z.Schluessel(), "bereich": a.Bereich,
 		"pruefung_nr": strconv.Itoa(ent.AuditNr), "bytes": strconv.Itoa(len(ergebnis)),
 	}); err != nil {
@@ -129,8 +127,8 @@ func (f *Ausfuehrer) Fuehre(ctx context.Context, auftrag Auftrag) (Antwort, erro
 }
 
 // fehler schreibt den Fehler ins Audit (geschwärzt) und gibt ihn zurück.
-func (f *Ausfuehrer) fehler(antwort Antwort, a pfoertner.Anfrage, fuerNutzer, intern string, geheim []string) Antwort {
-	_, _ = f.Audit.Schreibe(a.Firma, "ausfuehrung_fehler", map[string]string{
+func (f *Ausfuehrer) fehler(ctx context.Context, antwort Antwort, a pfoertner.Anfrage, fuerNutzer, intern string, geheim []string) Antwort {
+	_ = f.Pfoertner.Vermerke(ctx, a.Firma, "ausfuehrung_fehler", map[string]string{
 		"aufgabe": a.Aufgabe, "faehigkeit": a.Faehigkeit + "@" + a.Version, "bereich": a.Bereich,
 		"fehler": schwaerze(intern, geheim),
 	})

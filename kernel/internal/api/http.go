@@ -39,7 +39,7 @@ func Handler(p *pfoertner.Pfoertner, f *ausfuehrung.Ausfuehrer, log *slog.Logger
 			schreibeJSON(w, http.StatusBadRequest, map[string]string{"fehler": err.Error()})
 			return
 		}
-		ent := p.Pruefe(a)
+		ent := p.Pruefe(r.Context(), a)
 		log.Info("pruefung", "firma", a.Firma, "aufgabe", a.Aufgabe,
 			"faehigkeit", a.Faehigkeit, "ergebnis", ent.Ergebnis, "audit_nr", ent.AuditNr)
 		schreibeJSON(w, http.StatusOK, ent)
@@ -69,8 +69,10 @@ func Handler(p *pfoertner.Pfoertner, f *ausfuehrung.Ausfuehrer, log *slog.Logger
 			schreibeJSON(w, http.StatusBadRequest, map[string]string{"fehler": err.Error()})
 			return
 		}
-		if err := p.Stoppe(s.Firma, s.Aufgabe, s.Person); err != nil {
-			schreibeJSON(w, http.StatusForbidden, map[string]string{"fehler": err.Error()})
+		if err := p.Stoppe(r.Context(), s.Firma, s.Aufgabe, s.Person); err != nil {
+			// Keine Details nach außen: Speicherfehler könnten interne Angaben enthalten.
+			log.Warn("stopp abgelehnt", "firma", s.Firma, "aufgabe", s.Aufgabe)
+			schreibeJSON(w, http.StatusForbidden, map[string]string{"fehler": "stopp nicht möglich"})
 			return
 		}
 		schreibeJSON(w, http.StatusOK, map[string]string{"zustand": "gestoppt"})

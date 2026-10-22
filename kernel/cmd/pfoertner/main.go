@@ -1,10 +1,15 @@
 // Befehl pfoertner startet den Pförtner (Kernel) von BoticStudio.
 //
-// Stufe 1 läuft nur lokal zum Testen, mit erfundenen Testfirmen.
+// Die Verbindung zur Datenbank kommt aus der Umgebungsvariable
+// BOTICSTUDIO_DATENBANK, nie aus einem Aufrufparameter, damit das Passwort
+// nicht in der Prozessliste steht. Fehlt sie, arbeitet der Pförtner nur im
+// Arbeitsspeicher (zum lokalen Ausprobieren).
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -13,8 +18,8 @@ import (
 	"time"
 
 	"github.com/aga-coder/boticstudio/kernel/internal/api"
-	"github.com/aga-coder/boticstudio/kernel/internal/auditor"
 	"github.com/aga-coder/boticstudio/kernel/internal/ausfuehrung"
+	"github.com/aga-coder/boticstudio/kernel/internal/datenbank"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
 	"github.com/aga-coder/boticstudio/kernel/internal/mcpanschluss"
 	"github.com/aga-coder/boticstudio/kernel/internal/pfoertner"
@@ -56,10 +61,26 @@ func starte(e einstellung, log *slog.Logger) error {
 		log.Info("fähigkeit geladen", "faehigkeit", z.Schluessel(), "recht", z.Recht, "risiko", z.Risiko)
 	}
 
-	audit := auditor.NeuSpeicher()
-	p := pfoertner.Neu(pfoertner.StandardEinstellungen(), k, audit)
+	ctx := context.Background()
+	var speicher pfoertner.Speicher = pfoertner.NeuerArbeitsspeicher()
+	if dsn := os.Getenv("BOTICSTUDIO_DATENBANK"); dsn != "" {
+		pool, err := datenbank.Oeffne(ctx, dsn)
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		speicher = datenbank.Neu(pool)
+		log.Info("speicher", "art", "postgresql")
+	} else {
+		log.Warn("speicher", "art", "arbeitsspeicher", "hinweis", "nichts wird dauerhaft gespeichert")
+	}
+	p := pfoertner.Neu(pfoertner.StandardEinstellungen(), k, speicher)
 	if e.testdaten != "" {
-		if err := ladeTestdaten(p, e.testdaten); err != nil {
+		err := ladeTestdaten(ctx, p, e.testdaten)
+		switch {
+		case errors.Is(err, pfoertner.ErrGibtEsSchon):
+			log.Info("testdaten schon vorhanden, nichts geladen")
+		case err != nil:
 			return fmt.Errorf("testdaten: %w", err)
 		}
 	}
@@ -81,7 +102,7 @@ func starte(e einstellung, log *slog.Logger) error {
 		}
 	}
 	f := &ausfuehrung.Ausfuehrer{
-		Pfoertner: p, Katalog: k, Tresor: t, Audit: audit, Module: module,
+		Pfoertner: p, Katalog: k, Tresor: t, Module: module,
 		Aufrufer:  mcpanschluss.Anschluss{HTTP: &http.Client{Timeout: 90 * time.Second}},
 		Zeitlimit: 60 * time.Second,
 	}
@@ -97,7 +118,7 @@ func starte(e einstellung, log *slog.Logger) error {
 	return server.ListenAndServe()
 }
 
-func ladeTestdaten(p *pfoertner.Pfoertner, pfad string) error {
+func ladeTestdaten(ctx context.Context, p *pfoertner.Pfoertner, pfad string) error {
 	daten, err := os.ReadFile(pfad)
 	if err != nil {
 		return err
@@ -107,17 +128,17 @@ func ladeTestdaten(p *pfoertner.Pfoertner, pfad string) error {
 		return err
 	}
 	for _, f := range t.Firmen {
-		if err := p.LegeFirmaAn(f); err != nil {
+		if err := p.LegeFirmaAn(ctx, f); err != nil {
 			return err
 		}
 	}
 	for _, pe := range t.Personen {
-		if err := p.LegePersonAn(pe); err != nil {
+		if err := p.LegePersonAn(ctx, pe); err != nil {
 			return err
 		}
 	}
 	for _, e := range t.Erlaubnisse {
-		if err := p.ErteileErlaubnis(e); err != nil {
+		if err := p.ErteileErlaubnis(ctx, e); err != nil {
 			return err
 		}
 	}
