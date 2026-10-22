@@ -31,20 +31,42 @@ func TestFehlendeFelderSindStreng(t *testing.T) {
 
 func TestUngueltigeZettel(t *testing.T) {
 	for name, fall := range map[string]struct{ json, fehler string }{
-		"ohne fassung":       {`{"name":"x","version":"1","beschreibung":"x","recht":"keins"}`, "fassung"},
-		"neuere fassung":     {`{"fassung":2,"name":"x","version":"1","beschreibung":"x","recht":"keins"}`, "unbekannt"},
-		"fassung null":       {`{"fassung":0,"name":"x","version":"1","beschreibung":"x","recht":"keins"}`, "unbekannt"},
-		"unbekanntes feld":   {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"keins","neu":true}`, "unknown field"},
-		"ohne recht":         {`{"fassung":1,"name":"x","version":"1","beschreibung":"x"}`, "recht"},
-		"pflichtfelder":      {`{"fassung":1,"recht":"keins"}`, "beschreibung, name, version"},
-		"recht ohne bereich": {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"x.tun"}`, "bereich"},
-		"falsches risiko":    {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"keins","risiko":"egal"}`, "risikostufe"},
-		"at im namen":        {`{"fassung":1,"name":"x@y","version":"1","beschreibung":"x","recht":"keins"}`, "@"},
+		"ohne fassung":        {`{"name":"x","version":"1","beschreibung":"x","recht":"keins"}`, "fassung"},
+		"neuere fassung":      {`{"fassung":3,"name":"x","version":"1","beschreibung":"x","recht":"keins"}`, "unbekannt"},
+		"fassung null":        {`{"fassung":0,"name":"x","version":"1","beschreibung":"x","recht":"keins"}`, "unbekannt"},
+		"unbekanntes feld":    {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"keins","neu":true}`, "unknown field"},
+		"ohne recht":          {`{"fassung":1,"name":"x","version":"1","beschreibung":"x"}`, "recht"},
+		"pflichtfelder":       {`{"fassung":1,"recht":"keins"}`, "beschreibung, name, version"},
+		"recht ohne bereich":  {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"x.tun"}`, "bereich"},
+		"falsches risiko":     {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"keins","risiko":"egal"}`, "risikostufe"},
+		"zugang in fassung 1": {`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"x.tun","bereich":"b","zugang":"postfach"}`, "erst ab fassung 2"},
+		"zugang ohne recht":   {`{"fassung":2,"name":"x","version":"1","beschreibung":"x","recht":"keins","zugang":"postfach"}`, "braucht auch ein recht"},
+		"zugang mit pfad":     {`{"fassung":2,"name":"x","version":"1","beschreibung":"x","recht":"x.tun","bereich":"b","zugang":"a/b"}`, "kein /"},
+		"at im namen":         {`{"fassung":1,"name":"x@y","version":"1","beschreibung":"x","recht":"keins"}`, "@"},
 	} {
 		_, err := Lies([]byte(fall.json))
 		if err == nil || !strings.Contains(err.Error(), fall.fehler) {
 			t.Errorf("%s: fehler %v, erwartet etwas mit %q", name, err, fall.fehler)
 		}
+	}
+}
+
+// Regel B: Ein Zettel der Fassung 1 bleibt gültig, auch neben Fassung 2,
+// und bekommt ohne "zugang" keine Zugangsdaten.
+func TestFassung1BleibtGueltig(t *testing.T) {
+	alt, err := Lies([]byte(`{"fassung":1,"name":"x","version":"1","beschreibung":"x","recht":"x.tun","bereich":"b","risiko":"niedrig","wirkt_nach_aussen":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alt.Zugang != "" {
+		t.Fatalf("fassung 1 bekommt zugang %q", alt.Zugang)
+	}
+	neu, err := Lies([]byte(`{"fassung":2,"name":"x","version":"2","beschreibung":"x","recht":"x.tun","bereich":"b","zugang":"postfach"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if neu.Zugang != "postfach" {
+		t.Fatalf("zugang nicht gelesen: %+v", neu)
 	}
 }
 

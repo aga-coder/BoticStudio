@@ -18,13 +18,26 @@ Der Pförtner prüft jeden Schritt, den der Orchestrator ausführen möchte, und
 
 Jede Entscheidung geht an den Auditor (nur anhängen, Hash-Kette). Kann er nicht schreiben, wird abgelehnt.
 
+## Ausführen
+
+`POST /v1/ausfuehren` prüft zuerst wie oben. Nur bei **erlaubt** geht es weiter:
+
+1. Eingaben dürfen nur die sein, die der Beipackzettel nennt. `bereich` und `zugang` setzt allein der Pförtner.
+2. Nennt der Beipackzettel einen `zugang` (ab Fassung 2), holt der Pförtner ihn aus dem Tresor der eigenen Firma, passend zum geprüften Bereich.
+3. Er ruft das Modul der Fähigkeit über MCP auf, mit Zeitlimit. Welches Modul wo läuft, steht in der Modul-Liste (`-module`).
+4. Steht ein geheimer Wert aus dem Zugang im Ergebnis, wird es zurückgehalten. Fehlermeldungen werden geschwärzt.
+5. Das Audit bekommt nur, was ausgeführt wurde und wie groß das Ergebnis war, nie den Inhalt.
+
 ## Starten und testen
 
 ```sh
 cd kernel
 go test -race ./...
-go run ./cmd/pfoertner -katalog ../katalog -testdaten ../testdaten/testfirma.json
+go run ./cmd/pfoertner -katalog ../katalog -testdaten ../testdaten/testfirma.json \
+  -module ../testdaten/module.json -tresor ../testdaten/tresor.json
 ```
+
+`tresor.json` legst du nur lokal an, nach dem Muster `testdaten/tresor.beispiel.json`. Die Datei wird von Git ignoriert.
 
 Beispiel:
 
@@ -32,9 +45,8 @@ Beispiel:
 curl -X POST localhost:8470/v1/pruefen -d '{"firma":"testfirma-mueller","person":"ben","aufgabe":"a1","faehigkeit":"mail_lesen","version":"1.0.0","bereich":"postfach/info@mueller-test.de/INBOX"}'
 ```
 
-## Noch nicht in dieser Stufe
+## Noch nicht dabei
 
-- Weiterleiten an die Fähigkeiten über MCP und Zugangsdaten aus dem Tresor an den Anschluss geben (der Tresor-Baustein ist schon da).
-- Speichern in PostgreSQL (Erlaubnisse, Audit). Bis dahin liegt alles im Arbeitsspeicher.
+- Speichern in PostgreSQL (Erlaubnisse, Audit) und der echte Tresor (STACKIT Secrets Manager). Bis dahin liegt alles im Arbeitsspeicher.
 - Anmeldung der Aufrufer. Bis dahin hört der Pförtner nur auf `127.0.0.1`. Erlaubnisse vergeben geht bewusst nicht über HTTP.
 - Wartende Schritte speichern und bestätigen (kommt mit Schritt 2, Antwort senden).

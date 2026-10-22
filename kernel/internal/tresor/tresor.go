@@ -7,8 +7,10 @@
 package tresor
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"sync"
 )
 
@@ -70,4 +72,40 @@ func (s *Speicher) Hole(firma, name string) (Geheimnis, error) {
 		return Geheimnis{}, ErrNichtGefunden
 	}
 	return g, nil
+}
+
+// GeheimeFelder sind die Schlüssel in einem Tresor-Eintrag, deren Werte
+// nie in einem Ergebnis, einer Fehlermeldung oder im Audit stehen dürfen.
+var GeheimeFelder = []string{"passwort", "token", "access_token", "refresh_token", "client_secret"}
+
+// GeheimeWerte sammelt die Werte der geheimen Felder eines Eintrags.
+// Sehr kurze Werte werden übergangen, damit sie nicht in jedem Text gefunden werden.
+func GeheimeWerte(eintrag map[string]any) []string {
+	var werte []string
+	for _, feld := range GeheimeFelder {
+		if s, ok := eintrag[feld].(string); ok && len(s) >= 4 {
+			werte = append(werte, s)
+		}
+	}
+	return werte
+}
+
+// LadeDatei liest Zugänge aus einer JSON-Datei {firma: {bereich: {…}}}.
+// Nur für lokale Tests. Die Datei gehört nie ins Repo.
+func LadeDatei(pfad string) (*Speicher, error) {
+	daten, err := os.ReadFile(pfad)
+	if err != nil {
+		return nil, err
+	}
+	var roh map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(daten, &roh); err != nil {
+		return nil, errors.New("tresor-datei nicht lesbar")
+	}
+	s := NeuSpeicher()
+	for firma, eintraege := range roh {
+		for name, wert := range eintraege {
+			s.Lege(firma, name, NeuGeheimnis(string(wert)))
+		}
+	}
+	return s, nil
 }
