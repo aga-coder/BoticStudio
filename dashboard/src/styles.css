@@ -91,3 +91,21 @@ h1 { margin: 0; font-size: 1.6rem; }
 .leer { color: var(--leise); text-align: center; padding: 32px 0; }
 .fuss { margin-top: 32px; color: var(--leise); font-size: 0.875rem; border-top: 1px solid var(--linie); padding-top: 12px; }
 .fuss p { margin: 4px 0; }
+
+.ich { margin: 8px 0 0; color: var(--leise); font-size: 0.9rem; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.verweis-knopf {
+  background: none; border: 0; padding: 8px 0; min-height: 44px; font: inherit; color: var(--akzent);
+  text-decoration: underline; cursor: pointer;
+}
+.verweis-knopf:focus-visible, .anmelden input:focus-visible { outline: 3px solid var(--akzent); outline-offset: 2px; }
+
+.anmelden {
+  max-width: 400px; margin: 48px auto 0; display: flex; flex-direction: column; gap: 16px;
+  background: var(--flaeche); border: 1px solid var(--linie); border-radius: 12px; padding: 24px;
+}
+.anmelden label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
+.anmelden input {
+  font: inherit; font-weight: 400; padding: 10px 12px; min-height: 44px; border-radius: 8px;
+  border: 1px solid var(--linie); background: var(--grund); color: var(--text);
+}
+.anmelden .lauf { margin: 0; }

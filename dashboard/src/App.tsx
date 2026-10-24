@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   holeEinordnungen,
+  holeIch,
   holeKoepfe,
   holeZustand,
+  meldeAb,
+  meldeAn,
+  NichtAngemeldet,
   starteEinordnen,
+  type Ich,
   type Koepfe,
   type Kopf,
   type Lauf,
@@ -97,12 +102,114 @@ function Eintrag({ z, kopf, koepfeGeladen }: { z: Zeile; kopf?: Kopf; koepfeGela
   );
 }
 
+function Anmelden({ angemeldet }: { angemeldet: (ich: Ich) => void }) {
+  const [email, setEmail] = useState("");
+  const [passwort, setPasswort] = useState("");
+  const [fehler, setFehler] = useState("");
+  const [sendet, setSendet] = useState(false);
+
+  const absenden = async (e: FormEvent) => {
+    e.preventDefault();
+    setSendet(true);
+    try {
+      const ich = await meldeAn(email, passwort);
+      setPasswort("");
+      angemeldet(ich);
+    } catch (f) {
+      setFehler(f instanceof Error ? f.message : "Anmeldung fehlgeschlagen.");
+    } finally {
+      setSendet(false);
+    }
+  };
+
+  return (
+    <div className="seite">
+      <form className="anmelden" onSubmit={absenden}>
+        <h1>Anmelden</h1>
+        <label>
+          E-Mail
+          <input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+        <label>
+          Passwort
+          <input
+            type="password"
+            autoComplete="current-password"
+            required
+            value={passwort}
+            onChange={(e) => setPasswort(e.target.value)}
+          />
+        </label>
+        {fehler && (
+          <p className="lauf lauf-fehler" role="alert">
+            {fehler}
+          </p>
+        )}
+        <button className="knopf" type="submit" disabled={sendet}>
+          {sendet ? "Prüft …" : "Anmelden"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export function App() {
+  const [ich, setIch] = useState<Ich | null>(null);
+  const [fehler, setFehler] = useState("");
+
+  const pruefe = useCallback(async () => {
+    try {
+      setIch(await holeIch());
+      setFehler("");
+    } catch (f) {
+      setFehler(f instanceof Error ? f.message : "Der Dienst ist nicht erreichbar.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void pruefe();
+  }, [pruefe]);
+
+  const abgelaufen = useCallback(() => setIch({ anmeldung_noetig: true, angemeldet: false, person: null, firma: null }), []);
+  const abmelden = useCallback(async () => {
+    try {
+      await meldeAb();
+    } finally {
+      abgelaufen();
+    }
+  }, [abgelaufen]);
+
+  if (!ich) {
+    return (
+      <div className="seite">
+        {fehler && (
+          <p className="lauf lauf-fehler" role="alert">
+            {fehler}
+          </p>
+        )}
+      </div>
+    );
+  }
+  if (ich.anmeldung_noetig && !ich.angemeldet) return <Anmelden angemeldet={setIch} />;
+
+  return <Posteingang ich={ich} abmelden={ich.anmeldung_noetig ? abmelden : undefined} abgelaufen={abgelaufen} />;
+}
+
+function Posteingang({ ich, abmelden, abgelaufen }: { ich: Ich; abmelden?: () => void; abgelaufen: () => void }) {
   const [zustand, setZustand] = useState<Zustand | null>(null);
   const [zeilen, setZeilen] = useState<Zeile[]>([]);
   const [fehler, setFehler] = useState("");
   const [filter, setFilter] = useState<Filter>({ art: "alle" });
   const [koepfe, setKoepfe] = useState<Koepfe | null>(null);
+
+  // Ist die Sitzung abgelaufen, geht es zurück zur Anmeldung statt zu einer Fehlermeldung.
+  const zeigeFehler = useCallback(
+    (f: unknown, sonst: string) => {
+      if (f instanceof NichtAngemeldet) abgelaufen();
+      else setFehler(f instanceof Error ? f.message : sonst);
+    },
+    [abgelaufen],
+  );
 
   // Betreff und Absender kommen getrennt und dürfen fehlen: Ist das Postfach
   // nicht erreichbar, bleibt die Liste trotzdem sichtbar.
@@ -110,9 +217,10 @@ export function App() {
     try {
       setKoepfe(await holeKoepfe());
     } catch (f) {
+      if (f instanceof NichtAngemeldet) return abgelaufen();
       setKoepfe({ bereich: "", koepfe: {}, fehler: f instanceof Error ? f.message : "Nicht erreichbar." });
     }
-  }, []);
+  }, [abgelaufen]);
 
   const lade = useCallback(async () => {
     try {
@@ -122,9 +230,9 @@ export function App() {
       setFehler("");
       if (e.length) void ladeKoepfe();
     } catch (f) {
-      setFehler(f instanceof Error ? f.message : "Der Dienst ist nicht erreichbar.");
+      zeigeFehler(f, "Der Dienst ist nicht erreichbar.");
     }
-  }, [ladeKoepfe]);
+  }, [ladeKoepfe, zeigeFehler]);
 
   useEffect(() => {
     void lade();
@@ -142,18 +250,18 @@ export function App() {
           void ladeKoepfe();
         }
       } catch (f) {
-        setFehler(f instanceof Error ? f.message : "Der Dienst ist nicht erreichbar.");
+        zeigeFehler(f, "Der Dienst ist nicht erreichbar.");
       }
     }, ABFRAGE_MS);
     return () => clearInterval(t);
-  }, [laeuft, ladeKoepfe]);
+  }, [laeuft, ladeKoepfe, zeigeFehler]);
 
   const knopf = async () => {
     try {
       setZustand(await starteEinordnen());
       setFehler("");
     } catch (f) {
-      setFehler(f instanceof Error ? f.message : "Das Einordnen ließ sich nicht starten.");
+      zeigeFehler(f, "Das Einordnen ließ sich nicht starten.");
     }
   };
 
@@ -185,6 +293,14 @@ export function App() {
           {laeuft ? "Ordnet ein …" : "Jetzt einordnen"}
         </button>
       </header>
+      {abmelden && (
+        <p className="ich">
+          Angemeldet als {ich.person}
+          <button className="verweis-knopf" onClick={abmelden}>
+            Abmelden
+          </button>
+        </p>
+      )}
 
       {fehler && (
         <p className="lauf lauf-fehler" role="alert">

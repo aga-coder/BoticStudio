@@ -31,14 +31,35 @@ BOTICSTUDIO_ARBEITSDATEN=postgres://boticstudio_ablauf:...@localhost/boticstudio
   python -m ablauf.dashboard --einstellungen ../testdaten/ablauf.json
 ```
 
-Dann http://127.0.0.1:8490 öffnen. Der Knopf „Jetzt einordnen“ startet den Ablauf im Hintergrund, immer nur einen zur selben Zeit.
+Vorher ein Konto anlegen. Die Person muss es in der Firma schon geben, das Passwort (mindestens 12 Zeichen) fragt der Befehl verdeckt ab:
 
+```sh
+BOTICSTUDIO_ARBEITSDATEN=postgres://boticstudio_ablauf:...@localhost/boticstudio \
+  python -m ablauf.konto --firma testfirma-echt --person ablauf --email chefin@firma.de
+```
+
+Dann http://127.0.0.1:8490 öffnen und anmelden. Der Knopf „Jetzt einordnen“ startet den Ablauf im Hintergrund, immer nur einen zur selben Zeit.
+
+- `GET /api/ich`: ob eine Anmeldung nötig ist und wer angemeldet ist. Ohne Sitzung erlaubt, alles andere unter `/api` braucht eine.
+- `POST /api/anmelden` (`{"email", "passwort"}`) und `POST /api/abmelden`: nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`.
 - `GET /api/zustand`: Firma, Postfach, Kategorien, ob gerade eingeordnet wird, Zahlen des letzten Laufs.
 - `GET /api/einordnungen`: die Ergebnisse der Firma, neueste zuerst. Je Mail nur Verweis, Stand, Kategorie, Begründung, Art.-9-Verdacht ja/nein und die Nachweis-Nummer im Audit. Nie Betreff, Absender, Text oder Message-ID.
 - `GET /api/koepfe`: Absender, Betreff und Datum, live über den Pförtner (Fähigkeit `mail_kopf_lesen`, ohne Text). Nicht gespeichert, jeder Abruf steht im Audit. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`, weil er einen Abruf am Postfach auslöst.
 - `POST /api/einordnen`: startet das Einordnen. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`.
 
-Noch gibt es keine Anmeldung. Deshalb gilt bis dahin: Der Dienst hört nur auf 127.0.0.1, nimmt nur Anfragen an `127.0.0.1:<port>` oder `localhost:<port>` an (gegen DNS-Rebinding) und startet das Einordnen nur mit der eigenen Kopfzeile, die eine fremde Webseite nicht mitschicken kann. Für einen Betrieb im Netz braucht es vorher die Anmeldung.
+### Anmeldung
+
+- Konten und Sitzungen liegen im Schema `konto`, getrennt nach Firma mit Row-Level Security wie alle anderen Tabellen. Beim Anmelden findet der SHA-256 der E-Mail-Adresse die Firma (`konto.anmeldenamen`, für alle lesbar, enthält keine Adresse).
+- Passwörter nur als scrypt-Hash (N=2^17, r=8, p=1). Der Sitzungsschlüssel steht nur im Cookie (`HttpOnly`, `SameSite=Strict`), in der Datenbank nur sein SHA-256.
+- Eine Sitzung gilt 8 Stunden, nach 60 Minuten ohne Nutzung endet sie früher.
+- Nach 5 Fehlversuchen ist das Konto 15 Minuten gesperrt. Die Antwort ist immer dieselbe, ob es die Adresse gibt oder nicht, und dauert gleich lang.
+- Dem Pförtner nennt das Dashboard die angemeldete Person. Er prüft deren Erlaubnisse und schreibt sie ins Audit. Der Pförtner-Code bleibt dafür unverändert.
+- Ein Dienst gehört zu einer Firma: Konten anderer Firmen kommen nicht hinein.
+- Passwörter, Schlüssel und E-Mail-Adressen stehen in keinem Log und keiner Fehlermeldung.
+
+Ohne `BOTICSTUDIO_ARBEITSDATEN` läuft das Dashboard im Testmodus ohne Anmeldung, mit der Person aus den Einstellungen.
+
+Weiter gilt: Der Dienst hört nur auf 127.0.0.1, nimmt nur Anfragen an `127.0.0.1:<port>` oder `localhost:<port>` an (gegen DNS-Rebinding) und löst nichts ohne die eigene Kopfzeile aus, die eine fremde Webseite nicht mitschicken kann. Für einen Betrieb im Netz fehlen noch HTTPS (dann mit `Secure`-Cookie) und die Anmeldung der Dienste am Pförtner.
 
 ## Mit einem echten Test-Postfach
 

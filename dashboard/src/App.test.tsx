@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import type { Koepfe, Zeile, Zustand } from "./api";
+import type { Ich, Koepfe, Zeile, Zustand } from "./api";
 
 const ZUSTAND: Zustand = {
   firma: "testfirma",
@@ -26,6 +26,8 @@ const ZEILEN = [
 
 let zustand: Zustand;
 let koepfe: Koepfe;
+let ich: Ich;
+let angemeldet: boolean;
 let aufrufe: { pfad: string; init?: RequestInit }[];
 
 beforeEach(() => {
@@ -36,9 +38,24 @@ beforeEach(() => {
     fehler: "",
   };
   aufrufe = [];
+  // Standard: Testmodus ohne Anmeldung.
+  ich = { anmeldung_noetig: false, angemeldet: false, person: "p", firma: "testfirma" };
+  angemeldet = true;
   vi.stubGlobal("fetch", vi.fn(async (pfad: string, init?: RequestInit) => {
     aufrufe.push({ pfad, init });
     const json = (w: unknown, status = 200) => new Response(JSON.stringify(w), { status });
+    if (pfad === "/api/ich") return json(ich.anmeldung_noetig ? { ...ich, angemeldet, person: angemeldet ? "chefin" : null } : ich);
+    if (pfad === "/api/anmelden") {
+      const { passwort } = JSON.parse(String(init?.body));
+      if (passwort !== "richtig-richtig") return json({ fehler: "Anmeldung fehlgeschlagen." }, 401);
+      angemeldet = true;
+      return json({ anmeldung_noetig: true, angemeldet: true, person: "chefin", firma: "testfirma" });
+    }
+    if (pfad === "/api/abmelden") {
+      angemeldet = false;
+      return json({ angemeldet: false });
+    }
+    if (!angemeldet) return json({ fehler: "Bitte anmelden.", anmelden: true }, 401);
     if (pfad === "/api/zustand") return json(zustand);
     if (pfad === "/api/einordnungen") return json({ einordnungen: ZEILEN });
     if (pfad === "/api/koepfe") return json(koepfe);
@@ -133,4 +150,56 @@ test("Postfach nicht erreichbar: Liste bleibt, Hinweis erscheint", async () => {
   render(<App />);
   expect(await screen.findByText(/gerade nicht abrufbar: Anmeldung am Postfach fehlgeschlagen/)).toBeTruthy();
   expect(screen.getByText("Kunde möchte ein Angebot.")).toBeTruthy();
+});
+
+function mitAnmeldung(schon: boolean) {
+  ich = { anmeldung_noetig: true, angemeldet: schon, person: null, firma: null };
+  angemeldet = schon;
+}
+
+test("ohne Sitzung erscheint die Anmeldung, Mails werden nicht abgefragt", async () => {
+  mitAnmeldung(false);
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Anmelden" })).toBeTruthy();
+  expect(aufrufe.map((a) => a.pfad)).toEqual(["/api/ich"]);
+});
+
+test("falsches Passwort zeigt den Fehler, richtiges öffnet den Posteingang", async () => {
+  mitAnmeldung(false);
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText("E-Mail"), { target: { value: "chefin@firma.de" } });
+  fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "falsch" } });
+  fireEvent.click(screen.getByRole("button", { name: "Anmelden" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Anmeldung fehlgeschlagen.");
+
+  fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "richtig-richtig" } });
+  fireEvent.click(screen.getByRole("button", { name: "Anmelden" }));
+  expect(await screen.findByText("Kunde möchte ein Angebot.")).toBeTruthy();
+  expect(screen.getByText(/Angemeldet als chefin/)).toBeTruthy();
+  const anmelden = aufrufe.find((a) => a.pfad === "/api/anmelden")!;
+  expect((anmelden.init?.headers as Record<string, string>)["X-BoticStudio-Aktion"]).toBe("1");
+});
+
+test("Abmelden führt zurück zur Anmeldung", async () => {
+  mitAnmeldung(true);
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Abmelden" }));
+  expect(await screen.findByRole("heading", { name: "Anmelden" })).toBeTruthy();
+  expect(aufrufe.some((a) => a.pfad === "/api/abmelden")).toBe(true);
+});
+
+test("abgelaufene Sitzung führt zur Anmeldung statt zu einer Fehlermeldung", async () => {
+  mitAnmeldung(true);
+  render(<App />);
+  const knopf = await screen.findByRole("button", { name: "Jetzt einordnen" });
+  await waitFor(() => expect((knopf as HTMLButtonElement).disabled).toBe(false));
+  angemeldet = false;
+  fireEvent.click(knopf);
+  expect(await screen.findByRole("heading", { name: "Anmelden" })).toBeTruthy();
+});
+
+test("im Testmodus gibt es keinen Abmelden-Knopf", async () => {
+  render(<App />);
+  await screen.findByText("Kunde möchte ein Angebot.");
+  expect(screen.queryByRole("button", { name: "Abmelden" })).toBeNull();
 });
