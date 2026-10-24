@@ -6,6 +6,8 @@ Umgebung:
     BOTICSTUDIO_PFOERTNER    Adresse des Pförtners (Standard http://127.0.0.1:8470)
     BOTICSTUDIO_ARBEITSDATEN Verbindung zur Datenbank (Rolle boticstudio_ablauf).
                              Fehlt sie, werden die Ergebnisse nur gezählt.
+    BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI  Datei mit dem Schlüssel des Ablaufs.
+                             Ohne ihn nimmt der Pförtner nichts an.
 
 Ausgegeben werden nur Zahlen, nie Mailinhalte.
 """
@@ -38,7 +40,7 @@ def main() -> int:
     dsn = os.environ.get("BOTICSTUDIO_ARBEITSDATEN")
     speicher = PostgresSpeicher(dsn) if dsn else ListenSpeicher()
     try:
-        bericht = ordne_postfach_ein(HttpPfoertner(os.environ.get("BOTICSTUDIO_PFOERTNER", "http://127.0.0.1:8470")), speicher, einst)
+        bericht = ordne_postfach_ein(HttpPfoertner.aus_umgebung(), speicher, einst)
     except PfoertnerFehler as f:
         print(json.dumps({"abbruch": str(f)}, ensure_ascii=False))
         return 1

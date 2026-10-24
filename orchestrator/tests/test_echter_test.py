@@ -28,3 +28,21 @@ def test_nicht_im_repo():
 def test_ohne_zugangsdaten():
     with pytest.raises(SystemExit, match="fehlen"):
         bereite_vor(WURZEL.parent / "x", {})
+
+
+def test_legt_dienste_mit_eigenen_schluesseln_an(tmp_path):
+    import hashlib
+
+    pfade = bereite_vor(tmp_path / "echt", UMGEBUNG)
+    dienste = json.loads(open(pfade["dienste"]).read())["dienste"]
+    assert [d["name"] for d in dienste] == ["ablauf", "dashboard"]
+    schluessel = {}
+    for d in dienste:
+        datei = tmp_path / "echt" / f"{d['name']}.schluessel"
+        assert stat.S_IMODE(datei.stat().st_mode) == 0o600
+        schluessel[d["name"]] = datei.read_text()
+        assert hashlib.sha256(schluessel[d["name"]].encode()).hexdigest() == d["schluessel_sha256"]
+        assert d["firmen"] == ["testfirma-echt"]
+    assert schluessel["ablauf"] != schluessel["dashboard"]
+    for s in schluessel.values():
+        assert s not in open(pfade["dienste"]).read() and s not in json.dumps(pfade)

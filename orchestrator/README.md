@@ -2,7 +2,7 @@
 
 Ein kleiner Ablauf-Starter für den ersten Ablauf: Mails eines Postfachs **lesen → auf besondere Daten prüfen → einordnen**. Der richtige Orchestrator (Python, LangGraph) kommt später und ersetzt diesen Starter.
 
-- Jeder Schritt geht an den Pförtner (`/v1/ausfuehren`). Der Ablauf entscheidet nichts selbst. Auch eine Mail mit Art.-9-Verdacht legt er zum Einordnen vor: Der Pförtner lehnt ab, und die Ablehnung steht in seinem Audit.
+- Jeder Schritt geht an den Pförtner (`/v1/ausfuehren`), mit dem eigenen Schlüssel des Dienstes aus der Datei in `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI` (siehe kernel/README.md, „Wer anfragen darf“). Der Ablauf entscheidet nichts selbst. Auch eine Mail mit Art.-9-Verdacht legt er zum Einordnen vor: Der Pförtner lehnt ab, und die Ablehnung steht in seinem Audit.
 - Prüfen und Einordnen bekommen dieselbe, unveränderte Mail. Daran erkennt der Pförtner, dass sie vorgeprüft ist.
 - Ergebnisse landen in `arbeit.einordnungen` (Rolle `boticstudio_ablauf`, Row-Level Security je Firma). Gespeichert wird nur ein **Verweis** auf die Mail (Bereich, UID, Message-ID), Stand, Kategorie, Begründung, Markierungen und Modell. Nie Betreff, Absender oder Text.
 - Ausgegeben werden nur Zahlen.
@@ -18,6 +18,7 @@ python -m pytest -q
 
 # Pförtner und die vier Module laufen (siehe kernel/README.md, faehigkeiten/*/README.md)
 BOTICSTUDIO_ARBEITSDATEN=postgres://boticstudio_ablauf:...@localhost/boticstudio \
+BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=/ausserhalb/des/repos/ablauf.schluessel \
   python -m ablauf --einstellungen ../testdaten/ablauf.json
 ```
 
@@ -28,6 +29,7 @@ Ohne `BOTICSTUDIO_ARBEITSDATEN` werden die Ergebnisse nur gezählt, nicht gespei
 ```sh
 (cd ../dashboard && npm ci && npm run build)
 BOTICSTUDIO_ARBEITSDATEN=postgres://boticstudio_ablauf:...@localhost/boticstudio \
+BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=/ausserhalb/des/repos/dashboard.schluessel \
   python -m ablauf.dashboard --einstellungen ../testdaten/ablauf.json
 ```
 
@@ -59,7 +61,7 @@ Dann http://127.0.0.1:8490 öffnen und anmelden. Der Knopf „Jetzt einordnen“
 
 Ohne `BOTICSTUDIO_ARBEITSDATEN` läuft das Dashboard im Testmodus ohne Anmeldung, mit der Person aus den Einstellungen.
 
-Weiter gilt: Der Dienst hört nur auf 127.0.0.1, nimmt nur Anfragen an `127.0.0.1:<port>` oder `localhost:<port>` an (gegen DNS-Rebinding) und löst nichts ohne die eigene Kopfzeile aus, die eine fremde Webseite nicht mitschicken kann. Für einen Betrieb im Netz fehlen noch HTTPS (dann mit `Secure`-Cookie) und die Anmeldung der Dienste am Pförtner.
+Weiter gilt: Der Dienst hört nur auf 127.0.0.1, nimmt nur Anfragen an `127.0.0.1:<port>` oder `localhost:<port>` an (gegen DNS-Rebinding) und löst nichts ohne die eigene Kopfzeile aus, die eine fremde Webseite nicht mitschicken kann. Für einen Betrieb im Netz fehlt noch HTTPS (dann mit `Secure`-Cookie).
 
 ## Mit einem echten Test-Postfach
 
@@ -69,7 +71,7 @@ Die Zugangsdaten stehen nur in der Umgebung (`BOTICSTUDIO_TEST_IMAP_BENUTZER`, `
 python -m ablauf.echter_test --ordner /ausserhalb/des/repos/echt
 ```
 
-Das schreibt `tresor.json` (nur für den Besitzer lesbar), `firma.json` (Testfirma mit Erlaubnissen für genau dieses Postfach) und `ablauf.json`. Dann den Pförtner mit `-testdaten …/firma.json -tresor …/tresor.json` starten und den Ablauf mit `--einstellungen …/ablauf.json`. Das Passwort wird nie ausgegeben, und der Ordner darf nicht im Repo liegen.
+Das schreibt `tresor.json` (nur für den Besitzer lesbar), `firma.json` (Testfirma mit Erlaubnissen für genau dieses Postfach), `ablauf.json`, `dienste.json` und je einen eigenen Schlüssel `ablauf.schluessel` und `dashboard.schluessel`. Dann den Pförtner mit `-testdaten …/firma.json -tresor …/tresor.json -dienste …/dienste.json` starten, den Ablauf mit `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=…/ablauf.schluessel` und `--einstellungen …/ablauf.json`, das Dashboard mit `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=…/dashboard.schluessel`. Das Passwort wird nie ausgegeben, und der Ordner darf nicht im Repo liegen.
 
 Für Google braucht das Postfach die Bestätigung in zwei Schritten und ein App-Passwort.
 

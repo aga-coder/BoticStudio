@@ -4,6 +4,9 @@
 // BOTICSTUDIO_DATENBANK, nie aus einem Aufrufparameter, damit das Passwort
 // nicht in der Prozessliste steht. Fehlt sie, arbeitet der Pförtner nur im
 // Arbeitsspeicher (zum lokalen Ausprobieren).
+//
+// Ohne Datei mit Diensten (-dienste) startet der Pförtner nicht: Er nimmt nur
+// Anfragen von Diensten an, deren Schlüssel er kennt.
 package main
 
 import (
@@ -20,6 +23,7 @@ import (
 	"github.com/aga-coder/boticstudio/kernel/internal/api"
 	"github.com/aga-coder/boticstudio/kernel/internal/ausfuehrung"
 	"github.com/aga-coder/boticstudio/kernel/internal/datenbank"
+	"github.com/aga-coder/boticstudio/kernel/internal/dienste"
 	"github.com/aga-coder/boticstudio/kernel/internal/katalog"
 	"github.com/aga-coder/boticstudio/kernel/internal/mcpanschluss"
 	"github.com/aga-coder/boticstudio/kernel/internal/pfoertner"
@@ -39,20 +43,28 @@ func main() {
 	testdatei := flag.String("testdaten", "", "optionale Datei mit erfundenen Testfirmen")
 	moduldatei := flag.String("module", "", "Datei, die jeder Fähigkeit (name@version) die Adresse ihres Moduls zuordnet")
 	tresordatei := flag.String("tresor", "", "nur lokal: Datei mit Test-Zugängen (nie ins Repo)")
+	dienstdatei := flag.String("dienste", "", "Datei mit den Diensten, die anfragen dürfen (siehe cmd/dienstschluessel)")
 	flag.Parse()
 
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := starte(einstellung{*adresse, *katalogOrdner, *testdatei, *moduldatei, *tresordatei}, log); err != nil {
+	if err := starte(einstellung{*adresse, *katalogOrdner, *testdatei, *moduldatei, *tresordatei, *dienstdatei}, log); err != nil {
 		log.Error("pförtner beendet", "fehler", err)
 		os.Exit(1)
 	}
 }
 
 type einstellung struct {
-	adresse, katalog, testdaten, module, tresor string
+	adresse, katalog, testdaten, module, tresor, dienste string
 }
 
 func starte(e einstellung, log *slog.Logger) error {
+	if e.dienste == "" {
+		return errors.New("-dienste fehlt: ohne bekannte Dienste nimmt der Pförtner nichts an")
+	}
+	d, err := dienste.Lade(e.dienste)
+	if err != nil {
+		return fmt.Errorf("dienste: %w", err)
+	}
 	k, err := katalog.LadeOrdner(e.katalog)
 	if err != nil {
 		return fmt.Errorf("katalog: %w", err)
@@ -109,7 +121,7 @@ func starte(e einstellung, log *slog.Logger) error {
 
 	server := &http.Server{
 		Addr:              e.adresse,
-		Handler:           api.Handler(p, f, log),
+		Handler:           api.Handler(p, f, d, log),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      90 * time.Second,
