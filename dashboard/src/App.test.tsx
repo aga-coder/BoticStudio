@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import type { Zeile, Zustand } from "./api";
+import type { Koepfe, Zeile, Zustand } from "./api";
 
 const ZUSTAND: Zustand = {
   firma: "testfirma",
@@ -25,16 +25,23 @@ const ZEILEN = [
 ];
 
 let zustand: Zustand;
+let koepfe: Koepfe;
 let aufrufe: { pfad: string; init?: RequestInit }[];
 
 beforeEach(() => {
   zustand = { ...ZUSTAND };
+  koepfe = {
+    bereich: "postfach/info@firma.de/INBOX",
+    koepfe: { "1": { von: "Max Muster <max@kunde.de>", betreff: "Angebot für 200 Stück", datum: "2026-10-23T09:15:00+02:00" } },
+    fehler: "",
+  };
   aufrufe = [];
   vi.stubGlobal("fetch", vi.fn(async (pfad: string, init?: RequestInit) => {
     aufrufe.push({ pfad, init });
     const json = (w: unknown, status = 200) => new Response(JSON.stringify(w), { status });
     if (pfad === "/api/zustand") return json(zustand);
     if (pfad === "/api/einordnungen") return json({ einordnungen: ZEILEN });
+    if (pfad === "/api/koepfe") return json(koepfe);
     if (pfad === "/api/einordnen") {
       zustand = { ...zustand, laeuft: true };
       return json(zustand, 202);
@@ -109,4 +116,21 @@ test("Abbruch wird als Fehler angezeigt", async () => {
   zustand = { ...zustand, letzter_lauf: { beginn: "x", ende: "2026-10-24T08:01:00+00:00", bericht: null, abbruch: "Pförtner nicht erreichbar." } };
   render(<App />);
   expect((await screen.findByRole("alert")).textContent).toContain("Pförtner nicht erreichbar.");
+});
+
+test("zeigt Betreff und Absender live, mit eigener Kopfzeile abgefragt", async () => {
+  render(<App />);
+  expect(await screen.findByText("Angebot für 200 Stück")).toBeTruthy();
+  expect(screen.getByText("Max Muster <max@kunde.de>")).toBeTruthy();
+  const abruf = aufrufe.find((a) => a.pfad === "/api/koepfe")!;
+  expect((abruf.init?.headers as Record<string, string>)["X-BoticStudio-Aktion"]).toBe("1");
+  // Für Mails ohne Kopfzeilen ein ehrlicher Hinweis statt leerer Zeile
+  expect(screen.getAllByText(/nicht abrufbar \(Mail älter als 31 Tage/).length).toBe(2);
+});
+
+test("Postfach nicht erreichbar: Liste bleibt, Hinweis erscheint", async () => {
+  koepfe = { bereich: "", koepfe: {}, fehler: "Anmeldung am Postfach fehlgeschlagen." };
+  render(<App />);
+  expect(await screen.findByText(/gerade nicht abrufbar: Anmeldung am Postfach fehlgeschlagen/)).toBeTruthy();
+  expect(screen.getByText("Kunde möchte ein Angebot.")).toBeTruthy();
 });

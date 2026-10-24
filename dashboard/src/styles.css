@@ -58,6 +58,7 @@ h1 { margin: 0; font-size: 1.6rem; }
 .knopf:focus-visible, .kachel:focus-visible { outline: 3px solid var(--akzent); outline-offset: 2px; }
 
 .lauf { margin: 16px 0 0; color: var(--leise); }
+.lauf-hinweis { color: var(--hand); background: var(--hand-grund); padding: 10px 12px; border-radius: 8px; }
 .lauf-fehler { color: var(--fehler); background: var(--fehler-grund); padding: 10px 12px; border-radius: 8px; }
 
 .kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin: 20px 0; }
@@ -80,6 +81,8 @@ h1 { margin: 0; font-size: 1.6rem; }
 .marke-nicht_eingeordnet { color: var(--hand); background: var(--hand-grund); }
 .marke-fehler { color: var(--fehler); background: var(--fehler-grund); }
 .zeit, .verweis { color: var(--leise); font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.betreff { margin: 8px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.absender { margin: 2px 0 0; color: var(--leise); font-size: 0.9rem; overflow-wrap: anywhere; }
 .begruendung { margin: 8px 0 0; }
 .hinweis { margin: 8px 0 0; font-size: 0.9rem; color: var(--leise); }
 .hinweis-art9 { color: var(--hand); background: var(--hand-grund); padding: 6px 10px; border-radius: 6px; }

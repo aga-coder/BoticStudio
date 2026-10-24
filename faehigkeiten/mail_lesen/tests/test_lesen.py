@@ -3,7 +3,7 @@ import imaplib
 
 import pytest
 
-from mail_lesen.lesen import Fehler, imap_datum, lies, zerlege_bereich
+from mail_lesen.lesen import TEIL_GANZ, TEIL_KOPF, Fehler, imap_datum, lies, lies_koepfe, zerlege_bereich
 
 ZUGANG = {"server": "imap.test", "benutzer": "info@test.de", "passwort": "geheim-123"}
 
@@ -47,8 +47,12 @@ class FalscherServer:
             return "OK", [b" ".join(sorted(self.mails))]
         if befehl == "FETCH":
             uid, teil = args
-            assert teil == "(BODY.PEEK[])", "mails dürfen nicht als gelesen markiert werden"
-            return "OK", [(b"1 (UID " + uid + b" BODY[] {n}", self.mails[uid]), b")"]
+            assert teil in (TEIL_GANZ, TEIL_KOPF), "mails dürfen nicht als gelesen markiert werden"
+            roh = self.mails[uid]
+            if teil == TEIL_KOPF:
+                # Der Server liefert dann nur die Kopfzeilen, ohne Text.
+                roh = roh.split(b"\r\n\r\n", 1)[0] + b"\r\n\r\n"
+            return "OK", [(b"1 (UID " + uid + b" BODY[] {n}", roh), b")"]
         raise AssertionError(f"verbotener befehl {befehl}")
 
     def store(self, *args):
@@ -158,3 +162,23 @@ def test_ungueltiges_zertifikat_klare_meldung(monkeypatch):
     monkeypatch.setattr(lesen.imaplib, "IMAP4_SSL", ersatz)
     with pytest.raises(Fehler, match="Zertifikat"):
         lies("postfach/info@test.de", ZUGANG)
+
+
+def test_kopfzeilen_ohne_text_und_nur_lesend():
+    server = FalscherServer({b"1": mail(1, "Anfrage", "Geheimer Inhalt"), b"2": mail(2, "Beschwerde", "Ich bin krank")})
+    koepfe = lies_koepfe("postfach/info@test.de/INBOX", ZUGANG, seit_tagen=31, heute=dt.date(2026, 10, 22), verbinde=server)
+    assert [(k.uid, k.betreff, k.von) for k in koepfe] == [("2", "Beschwerde", "Kunde 2 <k2@kunde.de>"), ("1", "Anfrage", "Kunde 1 <k1@kunde.de>")]
+    assert koepfe[0].datum.startswith("2026-10-21T10:02") and koepfe[0].message_id == "<2@test>"
+    # Nur die Kopfzeilen werden geholt, der Text verlässt das Postfach nicht.
+    holen = [b for b in server.befehle if b[:2] == ("uid", "FETCH")]
+    assert holen and all(b[3] == TEIL_KOPF for b in holen)
+    assert not hasattr(koepfe[0], "text")
+    assert ("select", '"INBOX"', True) in server.befehle and server.abgemeldet
+
+
+def test_kopfzeilen_grenzen():
+    mails = {str(i).encode(): mail(i % 10, f"M{i}") for i in range(1, 600)}
+    server = FalscherServer(mails)
+    koepfe = lies_koepfe("postfach/info@test.de", ZUGANG, seit_tagen=999, hoechstens=10_000, heute=dt.date(2026, 10, 22), verbinde=server)
+    assert len(koepfe) == 500
+    assert ("uid", "SEARCH", None, "SINCE", "21-Sep-2026") in server.befehle

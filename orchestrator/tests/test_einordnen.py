@@ -34,6 +34,11 @@ class FalscherPfoertner:
             if not self.lesen_erlaubt:
                 return {"entscheidung": {"ergebnis": "abgelehnt", "grund": "Es fehlt die Erlaubnis."}}
             return {"entscheidung": {"ergebnis": "erlaubt"}, "ergebnis": {"anzahl": len(self.mails), "mails": copy.deepcopy(self.mails)}}
+        if name == "mail_kopf_lesen":
+            if not self.lesen_erlaubt:
+                return {"entscheidung": {"ergebnis": "abgelehnt", "grund": "Es fehlt die Erlaubnis."}}
+            koepfe = [{k: m[k] for k in ("uid", "message_id", "von", "betreff")} | {"datum": "2026-10-21T10:00:00+02:00"} for m in self.mails]
+            return {"entscheidung": {"ergebnis": "erlaubt"}, "ergebnis": {"anzahl": len(koepfe), "mails": koepfe}}
         fp = json.dumps(eingaben["mail"], sort_keys=True)
         if name == "besondere_daten_pruefen":
             m = ["art9_verdacht"] if "krank" in eingaben["mail"]["text"] else []
