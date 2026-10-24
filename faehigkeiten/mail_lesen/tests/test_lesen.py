@@ -127,6 +127,8 @@ def test_imap_datum_ist_englisch():
 def test_standardverbindung_prueft_zertifikat(monkeypatch):
     import ssl
 
+    import truststore
+
     from mail_lesen import lesen
 
     gesehen = {}
@@ -141,6 +143,8 @@ def test_standardverbindung_prueft_zertifikat(monkeypatch):
     kontext = gesehen["kontext"]
     assert kontext is not None
     assert kontext.verify_mode == ssl.CERT_REQUIRED and kontext.check_hostname
+    # Zertifikate des Betriebssystems, damit z. B. WEB.DE auch unter Windows geprüft werden kann
+    assert isinstance(kontext, truststore.SSLContext)
 
 
 def test_ungueltiges_zertifikat_klare_meldung(monkeypatch):
