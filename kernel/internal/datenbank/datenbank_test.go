@@ -171,7 +171,7 @@ func TestPfoertnerDarfNichtLoeschenUndAuditNichtAendern(t *testing.T) {
 	}
 }
 
-// Wächter für die Zukunft: Jede Tabelle in kern, audit und arbeit muss RLS mit FORCE
+// Wächter für die Zukunft: Jede Tabelle in kern, audit, arbeit und konto muss RLS mit FORCE
 // und eine Richtlinie haben. Eine neue Tabelle ohne Trennung fällt hier auf.
 func TestJedeTabelleHatErzwungeneTrennung(t *testing.T) {
 	db := testdb.Neu(t)
@@ -179,7 +179,7 @@ func TestJedeTabelleHatErzwungeneTrennung(t *testing.T) {
 		SELECT n.nspname || '.' || c.relname, c.relrowsecurity, c.relforcerowsecurity,
 		       EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)
 		FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname IN ('kern', 'audit', 'arbeit') AND c.relkind IN ('r', 'p')`)
+		WHERE n.nspname IN ('kern', 'audit', 'arbeit', 'konto') AND c.relkind IN ('r', 'p')`)
 	if err != nil {
 		t.Fatal(err)
 	}

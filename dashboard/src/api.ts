@@ -53,14 +53,44 @@ export interface Koepfe {
   fehler: string;
 }
 
+export interface Ich {
+  anmeldung_noetig: boolean;
+  angemeldet: boolean;
+  person: string | null;
+  firma: string | null;
+}
+
+/** Die Sitzung ist abgelaufen oder fehlt: zurück zur Anmeldung. */
+export class NichtAngemeldet extends Error {}
+
 const AUS_DEM_DASHBOARD = { "X-BoticStudio-Aktion": "1" };
 
 async function lies<T>(antwort: Response): Promise<T> {
   const daten = await antwort.json().catch(() => ({}));
   if (!antwort.ok) {
-    throw new Error((daten as { fehler?: string }).fehler ?? `Der Dienst antwortet mit ${antwort.status}.`);
+    const { fehler, anmelden } = daten as { fehler?: string; anmelden?: boolean };
+    const text = fehler ?? `Der Dienst antwortet mit ${antwort.status}.`;
+    throw anmelden ? new NichtAngemeldet(text) : new Error(text);
   }
   return daten as T;
+}
+
+export async function holeIch(): Promise<Ich> {
+  return lies<Ich>(await fetch("/api/ich"));
+}
+
+export async function meldeAn(email: string, passwort: string): Promise<Ich> {
+  // Der Dienst setzt den Sitzungs-Cookie (HttpOnly, für dieses Skript unsichtbar).
+  const antwort = await fetch("/api/anmelden", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUS_DEM_DASHBOARD },
+    body: JSON.stringify({ email, passwort }),
+  });
+  return lies<Ich>(antwort);
+}
+
+export async function meldeAb(): Promise<void> {
+  await lies(await fetch("/api/abmelden", { method: "POST", headers: AUS_DEM_DASHBOARD, body: "{}" }));
 }
 
 export async function holeZustand(): Promise<Zustand> {
