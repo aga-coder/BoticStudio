@@ -89,7 +89,7 @@ def test_eine_aufgabe_je_lauf_und_ziel_vom_einstellungen():
 def test_keine_inhalte_im_speicher():
     sp = ListenSpeicher()
     ordne_postfach_ein(FalscherPfoertner(), sp, EINST)
-    alles = json.dumps([e.__dict__ for e in sp.eintraege], ensure_ascii=False)
+    alles = json.dumps([e.__dict__ for e in sp.eintraege], ensure_ascii=False, default=str)
     for verboten in ("Angebot", "krank", "kaputt", "a@x", "Termin"):
         assert verboten not in alles
 
