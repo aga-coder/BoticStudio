@@ -48,3 +48,20 @@ def test_falsches_passwort_ohne_passwort_im_fehler():
     with pytest.raises(RuntimeError) as f:
         PostgresSpeicher(falsch)
     assert "GanzGeheim987" not in str(f.value)
+
+
+def test_liste_nur_eigene_firma_neueste_zuerst(eigentuemer):
+    sp = PostgresSpeicher(DSN)
+    sp.merke(Einordnung("py-a", "postfach/x/INBOX", "1", "<1>", "eingeordnet", "t1", kategorie="Anfrage", unsicher=False, audit_nr=7))
+    sp.merke(Einordnung("py-a", "postfach/x/INBOX", "2", "<2>", "nicht_eingeordnet", "t1", markierungen=["art9_verdacht"]))
+    sp.merke(Einordnung("py-b", "postfach/y/INBOX", "9", "<9>", "eingeordnet", "t2", kategorie="Sonstiges"))
+    try:
+        a = sp.liste("py-a")
+        b = sp.liste("py-b")
+        unbekannt = sp.liste("py-gibtsnicht")
+    finally:
+        sp.schliesse()
+    assert [e.uid for e in a] == ["2", "1"]
+    assert a[1].kategorie == "Anfrage" and a[1].audit_nr == 7 and a[1].eingeordnet_am is not None
+    assert a[0].markierungen == ["art9_verdacht"] and all(e.firma == "py-a" for e in a)
+    assert [e.uid for e in b] == ["9"] and unbekannt == []

@@ -1,0 +1,112 @@
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { App } from "./App";
+import type { Zeile, Zustand } from "./api";
+
+const ZUSTAND: Zustand = {
+  firma: "testfirma",
+  postfach: "postfach/info@firma.de/INBOX",
+  kategorien: ["Anfrage", "Beschwerde", "Sonstiges"],
+  laeuft: false,
+  letzter_lauf: null,
+};
+
+function zeile(uid: string, mehr: Partial<Zeile>): Zeile {
+  return {
+    bereich: "postfach/info@firma.de/INBOX", uid, stand: "eingeordnet", kategorie: "Anfrage", begruendung: "",
+    unsicher: false, art9_verdacht: false, modell: "m", nachweis: 1, eingeordnet_am: "2026-10-24T08:00:00+00:00", ...mehr,
+  };
+}
+
+const ZEILEN = [
+  zeile("1", { begruendung: "Kunde möchte ein Angebot.", nachweis: 11 }),
+  zeile("2", { kategorie: "Beschwerde", begruendung: "Ware kam beschädigt an." }),
+  zeile("3", { stand: "nicht_eingeordnet", kategorie: null, art9_verdacht: true, begruendung: "Bitte von Hand einordnen." }),
+];
+
+let zustand: Zustand;
+let aufrufe: { pfad: string; init?: RequestInit }[];
+
+beforeEach(() => {
+  zustand = { ...ZUSTAND };
+  aufrufe = [];
+  vi.stubGlobal("fetch", vi.fn(async (pfad: string, init?: RequestInit) => {
+    aufrufe.push({ pfad, init });
+    const json = (w: unknown, status = 200) => new Response(JSON.stringify(w), { status });
+    if (pfad === "/api/zustand") return json(zustand);
+    if (pfad === "/api/einordnungen") return json({ einordnungen: ZEILEN });
+    if (pfad === "/api/einordnen") {
+      zustand = { ...zustand, laeuft: true };
+      return json(zustand, 202);
+    }
+    return json({ fehler: "Unbekannt." }, 404);
+  }));
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+test("zeigt Zahlen je Kategorie und die Mails", async () => {
+  render(<App />);
+  expect(await screen.findByText("Kunde möchte ein Angebot.")).toBeTruthy();
+  const kachel = (titel: string) => screen.getByText(titel, { selector: ".kachel-titel" }).parentElement!;
+  expect(kachel("Anfrage").textContent).toBe("1Anfrage");
+  expect(kachel("Beschwerde").textContent).toBe("1Beschwerde");
+  expect(kachel("Sonstiges").textContent).toBe("0Sonstiges");
+  expect(kachel("Von Hand prüfen").textContent).toBe("1Von Hand prüfen");
+  expect(screen.getByText(/info@firma.de · INBOX/, { selector: ".postfach" })).toBeTruthy();
+  expect(screen.getByText(/Nachweis Nr. 11/)).toBeTruthy();
+});
+
+test("Art.-9-Verdacht wird deutlich gezeigt, ohne Versprechen", async () => {
+  render(<App />);
+  expect(await screen.findByText(/ging an kein Modell außerhalb der EU/)).toBeTruthy();
+  expect(screen.getByText(/keine Garantie/)).toBeTruthy();
+});
+
+test("Kachel filtert die Liste, zweiter Druck zeigt wieder alle", async () => {
+  render(<App />);
+  await screen.findByText("Kunde möchte ein Angebot.");
+  const kachel = screen.getByText("Beschwerde", { selector: ".kachel-titel" }).parentElement!;
+  fireEvent.click(kachel);
+  expect(screen.queryByText("Kunde möchte ein Angebot.")).toBeNull();
+  expect(screen.getByText("Ware kam beschädigt an.")).toBeTruthy();
+  fireEvent.click(kachel);
+  expect(screen.getByText("Kunde möchte ein Angebot.")).toBeTruthy();
+});
+
+test("Knopf startet das Einordnen mit eigener Kopfzeile und wartet auf das Ende", async () => {
+  render(<App />);
+  const knopf = await screen.findByRole("button", { name: "Jetzt einordnen" });
+  await waitFor(() => expect((knopf as HTMLButtonElement).disabled).toBe(false));
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(knopf);
+  });
+  const start = aufrufe.find((a) => a.pfad === "/api/einordnen")!;
+  expect(start.init?.method).toBe("POST");
+  expect((start.init?.headers as Record<string, string>)["X-BoticStudio-Aktion"]).toBe("1");
+  expect(screen.getByRole("button", { name: "Ordnet ein …" })).toBeTruthy();
+
+  zustand = {
+    ...zustand, laeuft: false,
+    letzter_lauf: { beginn: "2026-10-24T08:00:00+00:00", ende: "2026-10-24T08:01:00+00:00", abbruch: "",
+      bericht: { aufgabe: "a", gelesen: 3, eingeordnet: 2, nicht_eingeordnet: 1, fehler: 0, kategorien: {} } },
+  };
+  const vorher = aufrufe.filter((a) => a.pfad === "/api/einordnungen").length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1600);
+  });
+  expect(screen.getByRole("button", { name: "Jetzt einordnen" })).toBeTruthy();
+  expect(screen.getByText(/3 gelesen, 2 eingeordnet, 1 von Hand prüfen/)).toBeTruthy();
+  expect(aufrufe.filter((a) => a.pfad === "/api/einordnungen").length).toBe(vorher + 1);
+});
+
+test("Abbruch wird als Fehler angezeigt", async () => {
+  zustand = { ...zustand, letzter_lauf: { beginn: "x", ende: "2026-10-24T08:01:00+00:00", bericht: null, abbruch: "Pförtner nicht erreichbar." } };
+  render(<App />);
+  expect((await screen.findByRole("alert")).textContent).toContain("Pförtner nicht erreichbar.");
+});
