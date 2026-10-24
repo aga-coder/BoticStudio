@@ -4,6 +4,8 @@ Liest die Zugangsdaten aus der Umgebung und schreibt in einen lokalen Ordner:
   tresor.json  Zugang zum Postfach (nur für den Besitzer lesbar, 0600)
   firma.json   Testfirma mit Erlaubnissen für genau dieses Postfach
   ablauf.json  Einstellungen für den Ablauf
+  dienste.json Dienste, die den Pförtner aufrufen dürfen (nur SHA-256 der Schlüssel)
+  ablauf.schluessel, dashboard.schluessel  je ein eigener Schlüssel (0600)
 
 Umgebung:
   BOTICSTUDIO_TEST_IMAP_BENUTZER  Adresse des Test-Postfachs
@@ -16,13 +18,38 @@ Das Passwort wird nie ausgegeben. Der Ordner darf nicht im Repo liegen.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
 FIRMA = "testfirma-echt"
 WURZEL = Path(__file__).resolve().parents[2]
+
+
+DIENSTE = ("ablauf", "dashboard")
+
+
+def _schreibe_geheim(pfad: Path, inhalt: str) -> None:
+    fd = os.open(pfad, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(inhalt)
+    os.chmod(pfad, 0o600)
+
+
+def _lege_dienste_an(ordner: Path) -> dict[str, str]:
+    """Je Dienst ein neuer Schlüssel. Der Pförtner bekommt nur den SHA-256."""
+    eintraege, pfade = [], {}
+    for name in DIENSTE:
+        schluessel = secrets.token_urlsafe(32)
+        pfad = ordner / f"{name}.schluessel"
+        _schreibe_geheim(pfad, schluessel)
+        eintraege.append({"name": name, "schluessel_sha256": hashlib.sha256(schluessel.encode()).hexdigest(), "firmen": [FIRMA]})
+        pfade[f"schluessel_{name}"] = str(pfad)
+    (ordner / "dienste.json").write_text(json.dumps({"dienste": eintraege}, indent=2), encoding="utf-8")
+    return {"dienste": str(ordner / "dienste.json"), **pfade}
 
 
 def bereite_vor(ordner: Path, umgebung: dict[str, str]) -> dict[str, str]:
@@ -41,10 +68,7 @@ def bereite_vor(ordner: Path, umgebung: dict[str, str]) -> dict[str, str]:
         "server": umgebung.get("BOTICSTUDIO_TEST_IMAP_SERVER", "imap.gmail.com"),
         "port": 993, "benutzer": benutzer, "passwort": passwort,
     }}})
-    fd = os.open(tresor, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(inhalt)
-    os.chmod(tresor, 0o600)
+    _schreibe_geheim(tresor, inhalt)
 
     firma = {
         "firmen": [{"id": FIRMA, "ziele": [{"art": "ki_modell", "adresse": "openrouter.ai", "region": "ausserhalb_eu",
@@ -60,7 +84,7 @@ def bereite_vor(ordner: Path, umgebung: dict[str, str]) -> dict[str, str]:
     ablauf = json.loads((WURZEL / "testdaten" / "ablauf.json").read_text(encoding="utf-8"))
     ablauf.update(firma=FIRMA, person="ablauf", postfach=postfach + "/INBOX")
     (ordner / "ablauf.json").write_text(json.dumps(ablauf, indent=2, ensure_ascii=False), encoding="utf-8")
-    return {"tresor": str(tresor), "firma": str(ordner / "firma.json"), "ablauf": str(ordner / "ablauf.json")}
+    return {"tresor": str(tresor), "firma": str(ordner / "firma.json"), "ablauf": str(ordner / "ablauf.json"), **_lege_dienste_an(ordner)}
 
 
 def main() -> int:

@@ -30,6 +30,24 @@ Die Fingerabdrücke bildet nur die Ausführung aus den echten Eingaben. Eine rei
 
 Für den ersten Ablauf heißt das: „Besondere Daten prüfen“ läuft in der EU zuerst. Findet sie etwas (`art9_verdacht`), geht die Mail nicht an das Modell außerhalb der EU.
 
+## Wer anfragen darf
+
+Jede Anfrage außer `GET /gesund` braucht den Schlüssel eines bekannten Dienstes, als Kopfzeile `Authorization: Bearer <schlüssel>`. Jeder Dienst (Dashboard, Ablauf) hat seinen eigenen.
+
+- Der Pförtner kennt nur den SHA-256 jedes Schlüssels, aus der Datei `-dienste`. Ohne diese Datei startet er nicht. Ein fehlerhafter Eintrag verhindert den Start.
+- Zu jedem Dienst steht dort, für welche Firmen er anfragen darf. Fragt er für eine andere Firma, lehnt der Pförtner ab (403).
+- Ohne oder mit falschem Schlüssel: 401, egal welcher Weg. Der Schlüssel steht in keinem Log, nur der Name des Dienstes.
+- Das ist eine bewusste, kleine Ausnahme im Pförtner-Code (von Galip freigegeben). Regel A gilt weiter: Für eine neue Fähigkeit ändert sich am Pförtner nichts.
+
+Schlüssel anlegen (je Dienst einmal, ein neuer Aufruf ersetzt den alten Schlüssel):
+
+```sh
+go run ./cmd/dienstschluessel -name dashboard -firmen testfirma-mueller \
+  -dienste /ausserhalb/des/repos/dienste.json -ausgabe /ausserhalb/des/repos/dashboard.schluessel
+```
+
+Der Schlüssel steht danach nur in der Datei `-ausgabe` (nur für den Besitzer lesbar). Der Dienst findet sie über `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI`.
+
 ## Ausführen
 
 `POST /v1/ausfuehren` prüft zuerst wie oben. Nur bei **erlaubt** geht es weiter:
@@ -83,7 +101,7 @@ BOTICSTUDIO_TEST_DATENBANK=postgres://boticstudio_eigentuemer:...@localhost/boti
 
 BOTICSTUDIO_DATENBANK=postgres://boticstudio_pfoertner:...@localhost/boticstudio \
 go run ./cmd/pfoertner -katalog ../katalog -testdaten ../testdaten/testfirma.json \
-  -module ../testdaten/module.json -tresor ../testdaten/tresor.json
+  -module ../testdaten/module.json -tresor ../testdaten/tresor.json -dienste /ausserhalb/des/repos/dienste.json
 ```
 
 Ohne `BOTICSTUDIO_DATENBANK` läuft alles im Arbeitsspeicher. Testdaten werden nur geladen, wenn die Firma noch nicht in der Datenbank steht.
@@ -93,11 +111,12 @@ Ohne `BOTICSTUDIO_DATENBANK` läuft alles im Arbeitsspeicher. Testdaten werden n
 Beispiel:
 
 ```sh
-curl -X POST localhost:8470/v1/pruefen -d '{"firma":"testfirma-mueller","person":"ben","aufgabe":"a1","faehigkeit":"mail_lesen","version":"1.0.0","bereich":"postfach/info@mueller-test.de/INBOX"}'
+curl -X POST localhost:8470/v1/pruefen -H "Authorization: Bearer $(cat /ausserhalb/des/repos/ablauf.schluessel)" -d '{"firma":"testfirma-mueller","person":"ben","aufgabe":"a1","faehigkeit":"mail_lesen","version":"1.0.0","bereich":"postfach/info@mueller-test.de/INBOX"}'
 ```
 
 ## Noch nicht dabei
 
 - Der echte Tresor (STACKIT Secrets Manager). Bis dahin kommen Zugangsdaten aus einer lokalen Datei.
-- Anmeldung der Aufrufer. Bis dahin hört der Pförtner nur auf `127.0.0.1`. Erlaubnisse vergeben geht bewusst nicht über HTTP.
+- Verschlüsselte Verbindung (HTTPS) zwischen Diensten und Pförtner, kommt mit dem Hosting. Bis dahin hört der Pförtner nur auf `127.0.0.1`. Erlaubnisse vergeben geht bewusst nicht über HTTP.
+- Der Name des Dienstes steht im Log, noch nicht im Audit.
 - Wartende Schritte speichern und bestätigen (kommt mit Schritt 2, Antwort senden).

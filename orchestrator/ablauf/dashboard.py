@@ -6,7 +6,8 @@ startet das Einordnen auf Knopfdruck.
 Dann im Browser http://127.0.0.1:8490 öffnen. Die Oberfläche (dashboard/)
 muss vorher mit `npm run build` gebaut sein.
 
-Umgebung wie beim Ablauf-Starter (BOTICSTUDIO_PFOERTNER, BOTICSTUDIO_ARBEITSDATEN).
+Umgebung wie beim Ablauf-Starter (BOTICSTUDIO_PFOERTNER, BOTICSTUDIO_ARBEITSDATEN,
+BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI mit dem eigenen Schlüssel des Dashboards).
 
 Anmeldung: Mit BOTICSTUDIO_ARBEITSDATEN braucht jede Anfrage an /api eine
 Sitzung (Konten anlegen mit `python -m ablauf.konto`). Dem Pförtner nennt das
@@ -398,15 +399,17 @@ def main() -> int:
 
     with open(args.einstellungen, encoding="utf-8") as f:
         einst = Einstellungen(**json.load(f))
+    try:
+        pf = HttpPfoertner.aus_umgebung()
+    except PfoertnerFehler as f:
+        print(f, file=sys.stderr)
+        return 2
     dsn = os.environ.get("BOTICSTUDIO_ARBEITSDATEN")
     speicher: Speicher = PostgresSpeicher(dsn) if dsn else ListenSpeicher()
     konten = PostgresKonten(dsn) if dsn else None
     if not dsn:
         print("Ohne BOTICSTUDIO_ARBEITSDATEN: Testmodus ohne Anmeldung, Ergebnisse nur im Arbeitsspeicher.", file=sys.stderr)
-    db = Dashboard(
-        HttpPfoertner(os.environ.get("BOTICSTUDIO_PFOERTNER", "http://127.0.0.1:8470")), speicher, einst,
-        Anmeldung(konten) if konten else None,
-    )
+    db = Dashboard(pf, speicher, einst, Anmeldung(konten) if konten else None)
     server = ThreadingHTTPServer((ADRESSE, args.port), baue_handler(db, args.port, args.oberflaeche))
     print(f"Dashboard: http://{ADRESSE}:{args.port}", file=sys.stderr)
     try:
