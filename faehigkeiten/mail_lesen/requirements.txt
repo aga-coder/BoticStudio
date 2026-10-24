@@ -1,1 +1,2 @@
 mcp==2.3.0
+truststore==0.10.4

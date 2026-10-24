@@ -21,6 +21,8 @@ from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
+import truststore
+
 MAX_TAGE = 31
 MAX_MAILS = 100
 MAX_TEXT = 20_000
@@ -94,8 +96,13 @@ def verbinde_sicher(server: str, port: int, timeout: float) -> imaplib.IMAP4_SSL
 
     imaplib prüft das Zertifikat ohne eigenen Kontext nicht. Dann könnte sich
     jemand dazwischenschalten und das Passwort abgreifen.
+
+    Geprüft wird gegen die Zertifikate des Betriebssystems (truststore). Unter
+    Windows lädt das System fehlende Stammzertifikate selbst nach, z. B. das
+    von WEB.DE (Telekom). Mit Pythons eigenem Kontext schlug das fehl.
     """
-    return imaplib.IMAP4_SSL(server, port, ssl_context=ssl.create_default_context(), timeout=timeout)
+    kontext = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    return imaplib.IMAP4_SSL(server, port, ssl_context=kontext, timeout=timeout)
 
 
 def lies(
