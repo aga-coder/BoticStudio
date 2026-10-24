@@ -150,3 +150,40 @@ def test_oberflaeche_und_sicherheitskopf(dienst, oberflaeche):
     for pfad in ("/../geheim.txt", "/assets/../../geheim.txt", "/%2e%2e/geheim.txt"):
         assert b"nicht ausliefern" not in anfrage(port, "GET", pfad)[2]
     assert anfrage(port, "GET", "/api/gibtsnicht")[0] == 404
+
+
+def test_koepfe_live_ueber_den_pfoertner(dienst):
+    db, port, pf = dienst
+    status, _, koerper = anfrage(port, "GET", "/api/koepfe", KNOPF)
+    assert status == 200
+    antwort = json.loads(koerper)
+    assert antwort["fehler"] == "" and antwort["bereich"] == EINST.postfach
+    assert antwort["koepfe"]["1"] == {"von": "a@x", "betreff": "Angebot", "datum": "2026-10-21T10:00:00+02:00"}
+    # Nur Kopfzeilen: kein Text, keine Message-ID
+    for mail in MAILS:
+        assert mail["text"].encode() not in koerper and mail["message_id"].encode() not in koerper
+    name, eingaben, gesendet = pf.aufrufe[-1]
+    assert name == "mail_kopf_lesen" and gesendet["bereich"] == EINST.postfach and gesendet["person"] == EINST.person
+    assert gesendet["aufgabe"].startswith("ansehen-")
+    # Gespeichert wird davon nichts.
+    assert db.speicher.liste(EINST.firma) == []
+
+
+def test_koepfe_nur_aus_dem_dashboard(dienst):
+    _, port, pf = dienst
+    assert anfrage(port, "GET", "/api/koepfe")[0] == 403
+    assert anfrage(port, "GET", "/api/koepfe", {**KNOPF, "Origin": "https://boese.example"})[0] == 403
+    assert anfrage(port, "GET", "/api/koepfe", KNOPF, host="boese.example")[0] == 403
+    assert pf.aufrufe == []
+
+
+def test_koepfe_abgelehnt_zeigt_grund(oberflaeche):
+    db = Dashboard(FalscherPfoertner(lesen_erlaubt=False), ListenSpeicher(), EINST)
+    antwort = db.koepfe()
+    assert antwort["koepfe"] == {} and antwort["fehler"] == "Es fehlt die Erlaubnis."
+
+    class FernerPfoertner:
+        def fuehre(self, anfrage, eingaben):
+            raise PfoertnerFehler("Pförtner nicht erreichbar.")
+
+    assert Dashboard(FernerPfoertner(), ListenSpeicher(), EINST).koepfe()["fehler"] == "Pförtner nicht erreichbar."

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { holeEinordnungen, holeZustand, starteEinordnen, type Lauf, type Zeile, type Zustand } from "./api";
+import {
+  holeEinordnungen,
+  holeKoepfe,
+  holeZustand,
+  starteEinordnen,
+  type Koepfe,
+  type Kopf,
+  type Lauf,
+  type Zeile,
+  type Zustand,
+} from "./api";
 
 type Filter = { art: "alle" } | { art: "kategorie"; name: string } | { art: "hand" } | { art: "fehler" };
 
@@ -53,15 +63,23 @@ function LaufZeile({ lauf, laeuft }: { lauf: Lauf | null; laeuft: boolean }) {
   );
 }
 
-function Eintrag({ z }: { z: Zeile }) {
+function Eintrag({ z, kopf, koepfeGeladen }: { z: Zeile; kopf?: Kopf; koepfeGeladen: boolean }) {
   const marke =
     z.stand === "eingeordnet" ? z.kategorie : z.stand === "nicht_eingeordnet" ? "Von Hand prüfen" : "Fehler";
   return (
     <li className={`eintrag eintrag-${z.stand}`}>
       <div className="eintrag-kopf">
         <span className={`marke marke-${z.stand}`}>{marke}</span>
-        <span className="zeit">{zeit(z.eingeordnet_am)}</span>
+        <span className="zeit">{zeit(kopf?.datum || z.eingeordnet_am)}</span>
       </div>
+      {kopf ? (
+        <>
+          <p className="betreff">{kopf.betreff || "(ohne Betreff)"}</p>
+          <p className="absender">{kopf.von}</p>
+        </>
+      ) : (
+        koepfeGeladen && <p className="hinweis">Betreff und Absender nicht abrufbar (Mail älter als 31 Tage oder nicht mehr im Ordner).</p>
+      )}
       {z.art9_verdacht ? (
         <p className="hinweis hinweis-art9">
           Verdacht auf besondere Daten (Art. 9 DSGVO). Diese Mail ging an kein Modell außerhalb der EU. Bitte von Hand
@@ -84,6 +102,17 @@ export function App() {
   const [zeilen, setZeilen] = useState<Zeile[]>([]);
   const [fehler, setFehler] = useState("");
   const [filter, setFilter] = useState<Filter>({ art: "alle" });
+  const [koepfe, setKoepfe] = useState<Koepfe | null>(null);
+
+  // Betreff und Absender kommen getrennt und dürfen fehlen: Ist das Postfach
+  // nicht erreichbar, bleibt die Liste trotzdem sichtbar.
+  const ladeKoepfe = useCallback(async () => {
+    try {
+      setKoepfe(await holeKoepfe());
+    } catch (f) {
+      setKoepfe({ bereich: "", koepfe: {}, fehler: f instanceof Error ? f.message : "Nicht erreichbar." });
+    }
+  }, []);
 
   const lade = useCallback(async () => {
     try {
@@ -91,10 +120,11 @@ export function App() {
       setZustand(z);
       setZeilen(e);
       setFehler("");
+      if (e.length) void ladeKoepfe();
     } catch (f) {
       setFehler(f instanceof Error ? f.message : "Der Dienst ist nicht erreichbar.");
     }
-  }, []);
+  }, [ladeKoepfe]);
 
   useEffect(() => {
     void lade();
@@ -107,13 +137,16 @@ export function App() {
       try {
         const z = await holeZustand();
         setZustand(z);
-        if (!z.laeuft) setZeilen(await holeEinordnungen());
+        if (!z.laeuft) {
+          setZeilen(await holeEinordnungen());
+          void ladeKoepfe();
+        }
       } catch (f) {
         setFehler(f instanceof Error ? f.message : "Der Dienst ist nicht erreichbar.");
       }
     }, ABFRAGE_MS);
     return () => clearInterval(t);
-  }, [laeuft]);
+  }, [laeuft, ladeKoepfe]);
 
   const knopf = async () => {
     try {
@@ -177,13 +210,24 @@ export function App() {
         })}
       </nav>
 
+      {koepfe?.fehler && (
+        <p className="lauf lauf-hinweis" role="status">
+          Betreff und Absender gerade nicht abrufbar: {koepfe.fehler}
+        </p>
+      )}
+
       <section aria-label="Mails">
         {sichtbar.length === 0 ? (
           <p className="leer">{zeilen.length === 0 ? "Noch keine Mails eingeordnet." : "Keine Mails in dieser Auswahl."}</p>
         ) : (
           <ul className="liste">
             {sichtbar.map((z) => (
-              <Eintrag key={`${z.bereich}/${z.uid}`} z={z} />
+              <Eintrag
+                key={`${z.bereich}/${z.uid}`}
+                z={z}
+                kopf={koepfe && koepfe.bereich === z.bereich ? koepfe.koepfe[z.uid] : undefined}
+                koepfeGeladen={!!koepfe && !koepfe.fehler}
+              />
             ))}
           </ul>
         )}
@@ -191,8 +235,8 @@ export function App() {
 
       <footer className="fuss">
         <p>
-          Gespeichert ist nur ein Verweis auf jede Mail. Betreff, Absender und Text bleiben im Postfach und werden hier
-          noch nicht angezeigt.
+          Gespeichert ist nur ein Verweis auf jede Mail. Betreff und Absender holt das Dashboard bei jedem Laden live aus
+          dem Postfach, über den Pförtner, und speichert sie nicht. Den Text einer Mail zeigt es nicht.
         </p>
         <p>
           Die Prüfung auf besondere Daten ist ein erster Filter mit einer Wortliste, keine Garantie. Was die Wortliste

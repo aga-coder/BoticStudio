@@ -1,5 +1,6 @@
 // Verbindung zum Dashboard-Dienst (python -m ablauf.dashboard).
-// Er liefert nur Arbeitsdaten: einen Verweis auf jede Mail, nie ihren Inhalt.
+// Gespeichert ist nur ein Verweis auf jede Mail. Betreff, Absender und Datum
+// holt der Dienst live über den Pförtner, den Text einer Mail nie.
 
 export type Stand = "eingeordnet" | "nicht_eingeordnet" | "fehler";
 
@@ -40,6 +41,20 @@ export interface Zustand {
   letzter_lauf: Lauf | null;
 }
 
+export interface Kopf {
+  von: string;
+  betreff: string;
+  datum: string;
+}
+
+export interface Koepfe {
+  bereich: string;
+  koepfe: Record<string, Kopf>;
+  fehler: string;
+}
+
+const AUS_DEM_DASHBOARD = { "X-BoticStudio-Aktion": "1" };
+
 async function lies<T>(antwort: Response): Promise<T> {
   const daten = await antwort.json().catch(() => ({}));
   if (!antwort.ok) {
@@ -56,11 +71,16 @@ export async function holeEinordnungen(): Promise<Zeile[]> {
   return (await lies<{ einordnungen: Zeile[] }>(await fetch("/api/einordnungen"))).einordnungen;
 }
 
+export async function holeKoepfe(): Promise<Koepfe> {
+  // Löst einen Abruf am Postfach aus, deshalb mit derselben Kopfzeile wie der Knopf.
+  return lies<Koepfe>(await fetch("/api/koepfe", { headers: AUS_DEM_DASHBOARD }));
+}
+
 export async function starteEinordnen(): Promise<Zustand> {
   // Die eigene Kopfzeile zeigt dem Dienst, dass der Knopf hier gedrückt wurde.
   const antwort = await fetch("/api/einordnen", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-BoticStudio-Aktion": "1" },
+    headers: { "Content-Type": "application/json", ...AUS_DEM_DASHBOARD },
     body: "{}",
   });
   return lies<Zustand>(antwort);

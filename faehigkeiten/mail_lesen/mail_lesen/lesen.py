@@ -25,7 +25,12 @@ import truststore
 
 MAX_TAGE = 31
 MAX_MAILS = 100
+MAX_KOEPFE = 500
 MAX_TEXT = 20_000
+
+# Ohne .PEEK würde der Server die Mails als gelesen markieren.
+TEIL_GANZ = "(BODY.PEEK[])"
+TEIL_KOPF = "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID FROM SUBJECT DATE)])"
 
 _MONATE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
@@ -44,6 +49,17 @@ class Mail:
     datum: str
     text: str
     gekuerzt: bool
+
+
+@dataclass
+class Kopf:
+    """Nur die Kopfzeilen, die das Dashboard zeigt. Kein Text, keine Empfänger."""
+
+    uid: str
+    message_id: str
+    von: str
+    betreff: str
+    datum: str
 
 
 def zerlege_bereich(bereich: str) -> tuple[str, str]:
@@ -105,18 +121,20 @@ def verbinde_sicher(server: str, port: int, timeout: float) -> imaplib.IMAP4_SSL
     return imaplib.IMAP4_SSL(server, port, ssl_context=kontext, timeout=timeout)
 
 
-def lies(
+def _hole(
     bereich: str,
     zugang: dict[str, Any],
-    seit_tagen: int = 7,
-    hoechstens: int = MAX_MAILS,
-    heute: dt.date | None = None,
-    verbinde: Callable[..., Any] | None = None,
-) -> list[Mail]:
-    """Liest die Mails der letzten Tage, neueste zuerst."""
+    seit_tagen: int,
+    hoechstens: int,
+    grenze: int,
+    teil: str,
+    heute: dt.date | None,
+    verbinde: Callable[..., Any] | None,
+) -> list[tuple[str, EmailMessage]]:
+    """Meldet sich an, öffnet den Ordner nur zum Lesen und holt die neuesten Mails (UID, Nachricht)."""
     _, ordner = zerlege_bereich(bereich)
     seit_tagen = max(1, min(int(seit_tagen), MAX_TAGE))
-    hoechstens = max(1, min(int(hoechstens), MAX_MAILS))
+    hoechstens = max(1, min(int(hoechstens), grenze))
 
     try:
         server = str(zugang["server"])
@@ -152,29 +170,16 @@ def lies(
         uids = (daten[0] or b"").split()
         neueste = list(reversed(uids))[:hoechstens]
 
-        mails: list[Mail] = []
+        gefunden: list[tuple[str, EmailMessage]] = []
         for uid in neueste:
-            typ, teile = imap.uid("FETCH", uid, "(BODY.PEEK[])")
+            typ, teile = imap.uid("FETCH", uid, teil)
             if typ != "OK":
                 continue
             roh = next((t[1] for t in teile if isinstance(t, tuple) and len(t) > 1), None)
             if not roh:
                 continue
-            nachricht = email.message_from_bytes(roh, policy=email.policy.default)
-            text = _text(nachricht)
-            mails.append(
-                Mail(
-                    uid=uid.decode(),
-                    message_id=str(nachricht.get("Message-ID", "")),
-                    von=str(nachricht.get("From", "")),
-                    an=str(nachricht.get("To", "")),
-                    betreff=str(nachricht.get("Subject", "")),
-                    datum=_datum(nachricht.get("Date")),
-                    text=text[:MAX_TEXT],
-                    gekuerzt=len(text) > MAX_TEXT,
-                )
-            )
-        return mails
+            gefunden.append((uid.decode(), email.message_from_bytes(roh, policy=email.policy.default)))
+        return gefunden
     finally:
         try:
             imap.logout()
@@ -182,5 +187,53 @@ def lies(
             pass
 
 
-def als_dict(mails: list[Mail]) -> dict[str, Any]:
+def lies(
+    bereich: str,
+    zugang: dict[str, Any],
+    seit_tagen: int = 7,
+    hoechstens: int = MAX_MAILS,
+    heute: dt.date | None = None,
+    verbinde: Callable[..., Any] | None = None,
+) -> list[Mail]:
+    """Liest die Mails der letzten Tage, neueste zuerst."""
+    mails: list[Mail] = []
+    for uid, nachricht in _hole(bereich, zugang, seit_tagen, hoechstens, MAX_MAILS, TEIL_GANZ, heute, verbinde):
+        text = _text(nachricht)
+        mails.append(
+            Mail(
+                uid=uid,
+                message_id=str(nachricht.get("Message-ID", "")),
+                von=str(nachricht.get("From", "")),
+                an=str(nachricht.get("To", "")),
+                betreff=str(nachricht.get("Subject", "")),
+                datum=_datum(nachricht.get("Date")),
+                text=text[:MAX_TEXT],
+                gekuerzt=len(text) > MAX_TEXT,
+            )
+        )
+    return mails
+
+
+def lies_koepfe(
+    bereich: str,
+    zugang: dict[str, Any],
+    seit_tagen: int = 7,
+    hoechstens: int = MAX_KOEPFE,
+    heute: dt.date | None = None,
+    verbinde: Callable[..., Any] | None = None,
+) -> list[Kopf]:
+    """Liest nur Absender, Betreff und Datum der Mails, neueste zuerst. Den Text holt der Server gar nicht erst."""
+    return [
+        Kopf(
+            uid=uid,
+            message_id=str(nachricht.get("Message-ID", "")),
+            von=str(nachricht.get("From", "")),
+            betreff=str(nachricht.get("Subject", "")),
+            datum=_datum(nachricht.get("Date")),
+        )
+        for uid, nachricht in _hole(bereich, zugang, seit_tagen, hoechstens, MAX_KOEPFE, TEIL_KOPF, heute, verbinde)
+    ]
+
+
+def als_dict(mails: list[Mail] | list[Kopf]) -> dict[str, Any]:
     return {"anzahl": len(mails), "mails": [asdict(m) for m in mails]}

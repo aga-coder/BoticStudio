@@ -14,9 +14,10 @@ Grenzen dieser Stufe, bewusst:
   Knopf eine eigene Kopfzeile, die eine fremde Webseite nicht mitschicken kann.
 - Eine Firma je Dienst, aus den Einstellungen.
 
-Die Antworten enthalten nie Betreff, Absender oder Text einer Mail und nie
-Zugangsdaten: Sie kommen nur aus den Arbeitsdaten, und dort steht nur ein
-Verweis auf die Mail.
+Gespeichert ist nur ein Verweis auf jede Mail. Betreff, Absender und Datum
+holt /api/koepfe bei jedem Abruf live über den Pförtner (Fähigkeit
+„mail_kopf_lesen“, ohne Text) und gibt sie nur weiter, nie in einen Speicher
+oder ein Log. Den Text einer Mail und Zugangsdaten liefert der Dienst nie.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ import mimetypes
 import os
 import sys
 import threading
+import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -35,12 +37,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .einordnen import Einstellungen, ordne_postfach_ein
+from .einordnen import Einstellungen, _anfrage, _erlaubt, _grund, ordne_postfach_ein
 from .pfoertner import HttpPfoertner, Pfoertner, PfoertnerFehler
 from .speicher import Einordnung, ListenSpeicher, PostgresSpeicher, Speicher
 
 ADRESSE = "127.0.0.1"
 KOPF_AKTION = "X-BoticStudio-Aktion"
+KOPF_LESEN = ("mail_kopf_lesen", "1.0.0")
 STANDARD_OBERFLAECHE = Path(__file__).resolve().parents[2] / "dashboard" / "dist"
 
 SICHERHEIT = {
@@ -97,6 +100,31 @@ class Dashboard:
 
     def einordnungen(self) -> list[dict[str, Any]]:
         return [als_zeile(e) for e in self.speicher.liste(self.einst.firma)]
+
+    def koepfe(self) -> dict[str, Any]:
+        """Absender, Betreff und Datum, live aus dem Postfach über den Pförtner.
+
+        Nichts davon wird gespeichert. Jeder Abruf steht im Audit des Pförtners,
+        und er prüft, ob die Person dieses Postfach lesen darf.
+        """
+        aufgabe = "ansehen-" + uuid.uuid4().hex[:12]
+        ergebnis: dict[str, Any] = {"bereich": self.einst.postfach, "koepfe": {}, "fehler": ""}
+        try:
+            antwort = self.pf.fuehre(
+                _anfrage(self.einst, aufgabe, KOPF_LESEN, bereich=self.einst.postfach),
+                {"seit_tagen": 31, "hoechstens": 500},
+            )
+        except PfoertnerFehler as f:
+            return {**ergebnis, "fehler": str(f)}
+        if not _erlaubt(antwort):
+            return {**ergebnis, "fehler": _grund(antwort)}
+        for m in antwort.get("ergebnis", {}).get("mails", []):
+            ergebnis["koepfe"][str(m.get("uid", ""))] = {
+                "von": str(m.get("von", "")),
+                "betreff": str(m.get("betreff", "")),
+                "datum": str(m.get("datum", "")),
+            }
+        return ergebnis
 
     def starte(self) -> bool:
         """Startet das Einordnen im Hintergrund. False, wenn es schon läuft."""
@@ -162,6 +190,18 @@ def baue_handler(db: Dashboard, port: int, oberflaeche: Path | None) -> type[Bas
                 return False
             return True
 
+        def _aus_dem_dashboard(self) -> bool:
+            herkunft = self.headers.get("Origin")
+            if herkunft is not None and urlsplit(herkunft).netloc not in erlaubte_hosts:
+                self._json(HTTPStatus.FORBIDDEN, {"fehler": "Fremde Herkunft."})
+                return False
+            # Eine fremde Webseite kann diese Kopfzeile nicht ohne Rückfrage (CORS) setzen,
+            # und auf die Rückfrage antwortet der Dienst nicht.
+            if self.headers.get(KOPF_AKTION) != "1":
+                self._json(HTTPStatus.FORBIDDEN, {"fehler": "Kopfzeile fehlt."})
+                return False
+            return True
+
         def do_GET(self) -> None:  # noqa: N802
             if not self._host_ok():
                 return
@@ -173,6 +213,10 @@ def baue_handler(db: Dashboard, port: int, oberflaeche: Path | None) -> type[Bas
                     self._json(HTTPStatus.OK, {"einordnungen": db.einordnungen()})
                 except RuntimeError as f:
                     self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"fehler": str(f)})
+            elif pfad == "/api/koepfe":
+                # Löst einen Abruf am Postfach aus, deshalb wie der Knopf nur aus dem Dashboard.
+                if self._aus_dem_dashboard():
+                    self._json(HTTPStatus.OK, db.koepfe())
             elif pfad.startswith("/api/"):
                 self._json(HTTPStatus.NOT_FOUND, {"fehler": "Unbekannt."})
             else:
@@ -181,14 +225,7 @@ def baue_handler(db: Dashboard, port: int, oberflaeche: Path | None) -> type[Bas
         def do_POST(self) -> None:  # noqa: N802
             if not self._host_ok():
                 return
-            herkunft = self.headers.get("Origin")
-            if herkunft is not None and urlsplit(herkunft).netloc not in erlaubte_hosts:
-                self._json(HTTPStatus.FORBIDDEN, {"fehler": "Fremde Herkunft."})
-                return
-            # Eine fremde Webseite kann diese Kopfzeile nicht ohne Rückfrage (CORS) setzen,
-            # und auf die Rückfrage antwortet der Dienst nicht.
-            if self.headers.get(KOPF_AKTION) != "1":
-                self._json(HTTPStatus.FORBIDDEN, {"fehler": "Kopfzeile fehlt."})
+            if not self._aus_dem_dashboard():
                 return
             if urlsplit(self.path).path != "/api/einordnen":
                 self._json(HTTPStatus.NOT_FOUND, {"fehler": "Unbekannt."})

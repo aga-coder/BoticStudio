@@ -16,7 +16,7 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m pytest -q
 
-# Pförtner und die drei Module laufen (siehe kernel/README.md, faehigkeiten/*/README.md)
+# Pförtner und die vier Module laufen (siehe kernel/README.md, faehigkeiten/*/README.md)
 BOTICSTUDIO_ARBEITSDATEN=postgres://boticstudio_ablauf:...@localhost/boticstudio \
   python -m ablauf --einstellungen ../testdaten/ablauf.json
 ```
@@ -35,6 +35,7 @@ Dann http://127.0.0.1:8490 öffnen. Der Knopf „Jetzt einordnen“ startet den 
 
 - `GET /api/zustand`: Firma, Postfach, Kategorien, ob gerade eingeordnet wird, Zahlen des letzten Laufs.
 - `GET /api/einordnungen`: die Ergebnisse der Firma, neueste zuerst. Je Mail nur Verweis, Stand, Kategorie, Begründung, Art.-9-Verdacht ja/nein und die Nachweis-Nummer im Audit. Nie Betreff, Absender, Text oder Message-ID.
+- `GET /api/koepfe`: Absender, Betreff und Datum, live über den Pförtner (Fähigkeit `mail_kopf_lesen`, ohne Text). Nicht gespeichert, jeder Abruf steht im Audit. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`, weil er einen Abruf am Postfach auslöst.
 - `POST /api/einordnen`: startet das Einordnen. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`.
 
 Noch gibt es keine Anmeldung. Deshalb gilt bis dahin: Der Dienst hört nur auf 127.0.0.1, nimmt nur Anfragen an `127.0.0.1:<port>` oder `localhost:<port>` an (gegen DNS-Rebinding) und startet das Einordnen nur mit der eigenen Kopfzeile, die eine fremde Webseite nicht mitschicken kann. Für einen Betrieb im Netz braucht es vorher die Anmeldung.
