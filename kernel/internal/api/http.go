@@ -4,6 +4,11 @@
 // Erlaubnisse vergeben geht bewusst nicht über diesen Weg, damit der
 // Orchestrator sich nie selbst Rechte geben kann (Grundregel 1).
 //
+// Freigaben (Bestätigung eines Menschen für einen wartenden Schritt) darf nur
+// ein Dienst weitergeben, bei dem das eigens eingetragen ist ("darf_freigeben").
+// Das ist das Dashboard, das Menschen selbst anmeldet. Der Schlüssel des
+// Orchestrators kann keine Freigabe entscheiden.
+//
 // Jede Anfrage außer /gesund braucht den Schlüssel eines bekannten Dienstes
 // (Kopfzeile "Authorization: Bearer ..."), und der Dienst darf nur für die
 // Firmen anfragen, die bei ihm eingetragen sind.
@@ -29,6 +34,20 @@ type Stoppauftrag struct {
 	Firma   string `json:"firma"`
 	Aufgabe string `json:"aufgabe"`
 	Person  string `json:"person"`
+}
+
+// Freigabeauftrag ist die Entscheidung eines Menschen über einen wartenden Schritt.
+type Freigabeauftrag struct {
+	Firma      string `json:"firma"`
+	Freigabe   string `json:"freigabe"`
+	Person     string `json:"person"`
+	Bestaetigt bool   `json:"bestaetigt"`
+}
+
+// Freigabenfrage fragt, was in einer Firma auf einen Menschen wartet.
+type Freigabenfrage struct {
+	Firma  string `json:"firma"`
+	Person string `json:"person"`
 }
 
 type dienstSchluessel struct{}
@@ -106,6 +125,66 @@ func Handler(p *pfoertner.Pfoertner, f *ausfuehrung.Ausfuehrer, d *dienste.Liste
 			return
 		}
 		schreibeJSON(w, http.StatusOK, map[string]string{"zustand": "gestoppt"})
+	})
+
+	// freigeben prüft zusätzlich, ob der Dienst Freigaben weitergeben darf.
+	freigeben := func(w http.ResponseWriter, r *http.Request, firma string) (string, bool) {
+		name, ok := fuer(w, r, firma)
+		if !ok {
+			return "", false
+		}
+		if dienst, _ := r.Context().Value(dienstSchluessel{}).(dienste.Dienst); !dienst.DarfFreigeben() {
+			log.Warn("dienst darf keine freigaben weitergeben", "dienst", name, "firma", firma, "weg", r.URL.Path)
+			schreibeJSON(w, http.StatusForbidden, map[string]string{"fehler": "dienst darf keine freigaben weitergeben"})
+			return "", false
+		}
+		return name, true
+	}
+
+	mux.HandleFunc("POST /v1/freigaben/offen", func(w http.ResponseWriter, r *http.Request) {
+		var frage Freigabenfrage
+		if err := lies(w, r, &frage); err != nil {
+			schreibeJSON(w, http.StatusBadRequest, map[string]string{"fehler": err.Error()})
+			return
+		}
+		if _, ok := freigeben(w, r, frage.Firma); !ok {
+			return
+		}
+		liste, err := p.OffeneFreigaben(r.Context(), frage.Firma, frage.Person)
+		if err != nil {
+			schreibeJSON(w, http.StatusForbidden, map[string]string{"fehler": "freigaben nicht lesbar"})
+			return
+		}
+		if liste == nil {
+			liste = []pfoertner.Freigabe{}
+		}
+		schreibeJSON(w, http.StatusOK, map[string]any{"freigaben": liste})
+	})
+
+	mux.HandleFunc("POST /v1/freigaben/entscheiden", func(w http.ResponseWriter, r *http.Request) {
+		var auftrag Freigabeauftrag
+		if err := lies(w, r, &auftrag); err != nil {
+			schreibeJSON(w, http.StatusBadRequest, map[string]string{"fehler": err.Error()})
+			return
+		}
+		dienst, ok := freigeben(w, r, auftrag.Firma)
+		if !ok {
+			return
+		}
+		frei, err := p.EntscheideFreigabe(r.Context(), auftrag.Firma, auftrag.Freigabe, auftrag.Person, auftrag.Bestaetigt)
+		if err != nil {
+			// Nur der eigene, datenfreie Grund geht hinaus, nie ein Speicherfehler.
+			grund := "freigabe nicht möglich"
+			if errors.Is(err, pfoertner.ErrFreigabe) {
+				grund = err.Error()
+			}
+			log.Warn("freigabe nicht entschieden", "dienst", dienst, "firma", auftrag.Firma, "freigabe", auftrag.Freigabe)
+			schreibeJSON(w, http.StatusConflict, map[string]string{"fehler": grund})
+			return
+		}
+		log.Info("freigabe entschieden", "dienst", dienst, "firma", auftrag.Firma, "freigabe", frei.ID,
+			"aufgabe", frei.Aufgabe, "stand", frei.Stand)
+		schreibeJSON(w, http.StatusOK, frei)
 	})
 
 	return anmeldung(mux, d, log)

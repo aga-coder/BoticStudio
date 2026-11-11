@@ -40,6 +40,13 @@ type Vorgang interface {
 	// geprueft ist false, wenn ihn noch keine prüfende Fähigkeit gesehen hat.
 	Vorpruefung(fingerabdruck string) (markierungen []string, geprueft bool, err error)
 	SpeichereVorpruefung(fingerabdruck, faehigkeit string, markierungen []string) error
+	// Freigabe liefert eine Freigabe und sperrt sie bis zum Ende des Vorgangs.
+	Freigabe(id string) (Freigabe, bool, error)
+	// FreigabeZuSchritt liefert die jüngste Freigabe zu einem Schritt einer Aufgabe.
+	FreigabeZuSchritt(aufgabe, schritt string) (Freigabe, bool, error)
+	SpeichereFreigabe(f Freigabe) error
+	// OffeneFreigaben liefert alle Freigaben im Stand "offen", älteste zuerst.
+	OffeneFreigaben() ([]Freigabe, error)
 	// Schreibe hängt einen Eintrag an die Audit-Kette der Firma.
 	Schreibe(art string, inhalt map[string]string) (auditor.Eintrag, error)
 }
@@ -76,6 +83,7 @@ type firmendaten struct {
 	aufgaben    map[string]Aufgabenstand
 	// vorpruefungen: Fingerabdruck -> Markierungen (vereinigt)
 	vorpruefungen map[string][]string
+	freigaben     []Freigabe // in der Reihenfolge des Anfragens
 	audit         []auditor.Eintrag
 }
 
@@ -121,6 +129,7 @@ func (d *firmendaten) kopie() *firmendaten {
 		erlaubnisse:   make(map[string]Erlaubnis, len(d.erlaubnisse)),
 		aufgaben:      make(map[string]Aufgabenstand, len(d.aufgaben)),
 		vorpruefungen: make(map[string][]string, len(d.vorpruefungen)),
+		freigaben:     append([]Freigabe(nil), d.freigaben...),
 		audit:         append([]auditor.Eintrag(nil), d.audit...),
 	}
 	for fp, m := range d.vorpruefungen {
@@ -258,6 +267,57 @@ func (v *speicherVorgang) SpeichereVorpruefung(fp, _ string, markierungen []stri
 	}
 	v.d.vorpruefungen[fp] = m
 	return nil
+}
+
+func (v *speicherVorgang) Freigabe(id string) (Freigabe, bool, error) {
+	if v.d == nil {
+		return Freigabe{}, false, nil
+	}
+	for _, f := range v.d.freigaben {
+		if f.ID == id {
+			return f, true, nil
+		}
+	}
+	return Freigabe{}, false, nil
+}
+
+func (v *speicherVorgang) FreigabeZuSchritt(aufgabe, schritt string) (Freigabe, bool, error) {
+	if v.d == nil {
+		return Freigabe{}, false, nil
+	}
+	for i := len(v.d.freigaben) - 1; i >= 0; i-- {
+		if f := v.d.freigaben[i]; f.Aufgabe == aufgabe && f.Schritt == schritt {
+			return f, true, nil
+		}
+	}
+	return Freigabe{}, false, nil
+}
+
+func (v *speicherVorgang) SpeichereFreigabe(f Freigabe) error {
+	if v.d == nil || f.Firma != v.firma {
+		return ErrUnbekannteFirma
+	}
+	for i := range v.d.freigaben {
+		if v.d.freigaben[i].ID == f.ID {
+			v.d.freigaben[i] = f
+			return nil
+		}
+	}
+	v.d.freigaben = append(v.d.freigaben, f)
+	return nil
+}
+
+func (v *speicherVorgang) OffeneFreigaben() ([]Freigabe, error) {
+	if v.d == nil {
+		return nil, nil
+	}
+	var liste []Freigabe
+	for _, f := range v.d.freigaben {
+		if f.Stand == FreigabeOffen {
+			liste = append(liste, f)
+		}
+	}
+	return liste, nil
 }
 
 func (v *speicherVorgang) Schreibe(art string, inhalt map[string]string) (auditor.Eintrag, error) {

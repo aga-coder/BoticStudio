@@ -329,6 +329,86 @@ func (v *vorgang) SpeichereVorpruefung(fp, faehigkeit string, markierungen []str
 	return err
 }
 
+const freigabeSpalten = `id, aufgabe, person, faehigkeit, version, bereich, ziel, schritt, daten, stand,
+	angefragt_am, gueltig_bis, coalesce(entschieden_von, ''), entschieden_am`
+
+func (v *vorgang) leseFreigaben(sql string, args ...any) ([]pfoertner.Freigabe, error) {
+	zeilen, err := v.tx.Query(v.ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer zeilen.Close()
+	var liste []pfoertner.Freigabe
+	for zeilen.Next() {
+		f := pfoertner.Freigabe{Firma: v.firma}
+		var daten []byte
+		var stand string
+		var am *time.Time
+		if err := zeilen.Scan(&f.ID, &f.Aufgabe, &f.Person, &f.Faehigkeit, &f.Version, &f.Bereich, &f.Ziel, &f.Schritt,
+			&daten, &stand, &f.AngefragtAm, &f.GueltigBis, &f.EntschiedenVon, &am); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(daten, &f.Daten); err != nil {
+			return nil, err
+		}
+		f.Stand = pfoertner.FreigabeStand(stand)
+		f.AngefragtAm, f.GueltigBis = f.AngefragtAm.UTC(), f.GueltigBis.UTC()
+		if am != nil {
+			f.EntschiedenAm = am.UTC()
+		}
+		liste = append(liste, f)
+	}
+	return liste, zeilen.Err()
+}
+
+func (v *vorgang) Freigabe(id string) (pfoertner.Freigabe, bool, error) {
+	liste, err := v.leseFreigaben(`SELECT `+freigabeSpalten+` FROM kern.freigaben
+		WHERE firma = $1 AND id = $2 FOR UPDATE`, v.firma, id)
+	if err != nil || len(liste) == 0 {
+		return pfoertner.Freigabe{}, false, err
+	}
+	return liste[0], true, nil
+}
+
+func (v *vorgang) FreigabeZuSchritt(aufgabe, schritt string) (pfoertner.Freigabe, bool, error) {
+	liste, err := v.leseFreigaben(`SELECT `+freigabeSpalten+` FROM kern.freigaben
+		WHERE firma = $1 AND aufgabe = $2 AND schritt = $3
+		ORDER BY angefragt_am DESC, id DESC LIMIT 1 FOR UPDATE`, v.firma, aufgabe, schritt)
+	if err != nil || len(liste) == 0 {
+		return pfoertner.Freigabe{}, false, err
+	}
+	return liste[0], true, nil
+}
+
+func (v *vorgang) SpeichereFreigabe(f pfoertner.Freigabe) error {
+	daten, err := json.Marshal(f.Daten)
+	if err != nil {
+		return err
+	}
+	if f.Daten == nil {
+		daten = []byte("{}")
+	}
+	var von *string
+	var am *time.Time
+	if f.EntschiedenVon != "" {
+		von, am = &f.EntschiedenVon, &f.EntschiedenAm
+	}
+	// Nach dem Anlegen ändern sich nur Stand, Frist und wer entschieden hat.
+	_, err = v.tx.Exec(v.ctx, `INSERT INTO kern.freigaben (firma, id, aufgabe, person, faehigkeit, version, bereich, ziel,
+			schritt, daten, stand, angefragt_am, gueltig_bis, entschieden_von, entschieden_am)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (firma, id) DO UPDATE SET stand = EXCLUDED.stand, gueltig_bis = EXCLUDED.gueltig_bis,
+			entschieden_von = EXCLUDED.entschieden_von, entschieden_am = EXCLUDED.entschieden_am`,
+		f.Firma, f.ID, f.Aufgabe, f.Person, f.Faehigkeit, f.Version, f.Bereich, f.Ziel, f.Schritt, daten,
+		string(f.Stand), f.AngefragtAm, f.GueltigBis, von, am)
+	return err
+}
+
+func (v *vorgang) OffeneFreigaben() ([]pfoertner.Freigabe, error) {
+	return v.leseFreigaben(`SELECT `+freigabeSpalten+` FROM kern.freigaben
+		WHERE firma = $1 AND stand = 'offen' ORDER BY angefragt_am, id`, v.firma)
+}
+
 func (v *vorgang) Schreibe(art string, inhalt map[string]string) (auditor.Eintrag, error) {
 	var vorher *auditor.Eintrag
 	var nr int
