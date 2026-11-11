@@ -196,6 +196,16 @@ class Orchestrator:
             raise LaufUnbekannt(lauf)
         return Lauf(lauf, treffer.group(1), "wartet", dict(bild.values.get("ergebnis") or {}), [dict(u.value) for u in bild.interrupts])
 
+    def wartende(self, firma: str) -> list[Lauf]:
+        """Alle Läufe der Firma, die auf einen Menschen warten."""
+        laeufe = []
+        for lauf in self._stand(firma).laeufe():
+            try:
+                laeufe.append(self.stand(firma, lauf))
+            except LaufUnbekannt:
+                continue  # fremde Firma, oder gerade fertig geworden
+        return laeufe
+
     def _abschluss(self, ablauf: str, firma: str, lauf: str, ende: dict[str, Any]) -> Lauf:
         wartet = [dict(u.value) for u in ende.get("__interrupt__", [])]
         ergebnis = dict(ende.get("ergebnis") or {})

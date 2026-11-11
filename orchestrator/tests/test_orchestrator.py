@@ -7,9 +7,9 @@ from langgraph.graph import END, START, StateGraph
 
 from ablauf.ablaeufe import MAIL_EINORDNEN, eingabe_aus, mail_einordnen
 from ablauf.orchestrator import LaufUnbekannt, Orchestrator, Zustand, schritt
-from ablauf.pfoertner import PfoertnerFehler
+from ablauf.pfoertner import FreigabeAbgewiesen, PfoertnerFehler, fingerabdruck
 from ablauf.speicher import ListenSpeicher
-from tests.test_einordnen import EINST, FalscherPfoertner
+from test_einordnen import EINST, FalscherPfoertner
 
 MELDEN = ("probe_melden", "1.0.0")
 ZAEHLEN = ("probe_zaehlen", "1.0.0")
@@ -32,6 +32,26 @@ class FreigabePfoertner:
         assert self.freigaben[freigabe_id]["stand"] == "offen"
         self.freigaben[freigabe_id]["stand"] = "bestaetigt" if bestaetigt else "abgelehnt"
 
+    # Was nur das Dashboard aufruft.
+    leitende = ("anna",)
+
+    def offene_freigaben(self, firma, person):
+        return [
+            {"id": fid, "firma": firma, "aufgabe": f["anfrage"]["aufgabe"], "person": f["anfrage"]["person"],
+             "faehigkeit": f["anfrage"]["faehigkeit"], "version": f["anfrage"]["version"], "bereich": f["anfrage"].get("bereich", ""),
+             "daten": {k: fingerabdruck(v) for k, v in f["eingaben"].items()}, "stand": "offen",
+             "angefragt_am": "2026-11-11T18:00:00Z", "gueltig_bis": "2026-11-18T18:00:00Z"}
+            for fid, f in self.freigaben.items() if f["stand"] == "offen" and f["anfrage"]["firma"] == firma
+        ]
+
+    def entscheide_freigabe(self, firma, freigabe, person, bestaetigt):
+        if person not in self.leitende:
+            raise FreigabeAbgewiesen("Nur leitende Personen können bestätigen oder ablehnen.")
+        if self.freigaben.get(freigabe, {}).get("stand") != "offen":
+            raise FreigabeAbgewiesen("Über diese Freigabe wurde schon entschieden.")
+        self.entscheide(freigabe, bestaetigt)
+        return {"id": freigabe, "stand": self.freigaben[freigabe]["stand"]}
+
     def fuehre(self, anfrage, eingaben):
         if self.kaputt:
             raise PfoertnerFehler("Pförtner nicht erreichbar.")
@@ -50,7 +70,7 @@ class FreigabePfoertner:
             self.gesendet.append(eingaben["text"])
             return {"entscheidung": {"ergebnis": "erlaubt", "audit_nr": 7, "freigabe_id": fid}, "ergebnis": {"gesendet": True}}
         fid = f"f-{len(self.freigaben) + 1}"
-        self.freigaben[fid] = {"schritt": s, "stand": "offen"}
+        self.freigaben[fid] = {"schritt": s, "stand": "offen", "anfrage": anfrage, "eingaben": eingaben}
         return {"entscheidung": {"ergebnis": "wartet", "grund": "Eine leitende Person muss bestätigen.", "freigabe_id": fid}}
 
 

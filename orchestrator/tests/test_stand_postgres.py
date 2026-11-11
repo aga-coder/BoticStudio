@@ -9,7 +9,7 @@ import pytest
 
 from ablauf.orchestrator import LaufUnbekannt
 from ablauf.stand import PostgresStaende, StandFehler, lies_schluessel, main, neuer_schluessel
-from tests.test_orchestrator import FreigabePfoertner, neu
+from test_orchestrator import FreigabePfoertner, neu
 
 DSN = os.environ.get("BOTICSTUDIO_TEST_ARBEITSDATEN")
 EIGENTUEMER = os.environ.get("BOTICSTUDIO_TEST_ARBEITSDATEN_EIGENTUEMER")

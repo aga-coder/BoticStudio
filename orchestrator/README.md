@@ -12,7 +12,7 @@ Dateien: `orchestrator.py` (Läufe starten und fortsetzen, der Baustein `schritt
 ## Was er noch nicht kann
 
 - Er sucht sich keine Fähigkeiten selbst aus dem Katalog und plant nichts mit einem KI-Modell. Abläufe sind fest beschrieben.
-- Das Dashboard zeigt wartende Läufe noch nicht. Dashboard und Befehlszeile nutzen den Stand in PostgreSQL noch nicht (nächster Schritt) und halten Stände bis dahin nur im Arbeitsspeicher. Ablauf 1 hat ohnehin keine Stelle, an der ein Mensch bestätigen muss.
+- Im Katalog gibt es noch keinen Ablauf, der auf einen Menschen wartet. Ablauf 1 hat keine solche Stelle. Die Liste „Wartet auf Freigabe“ im Dashboard bleibt im Betrieb also vorerst leer.
 - Die Freigabe ist nur mit einem Probe-Ablauf in den Tests belegt. Im Katalog gibt es noch keine Fähigkeit, die nach außen wirkt.
 - Ein Schlüssel für die Stände gilt für alle Firmen. Je Firma ein eigener aus dem Schlüsseldienst (STACKIT KMS) kommt mit dem Hosting. Einen Schlüsselwechsel gibt es noch nicht.
 - Wartende Läufe räumt noch niemand auf, wenn ihre Freigabe abläuft.
@@ -77,6 +77,20 @@ Dann http://127.0.0.1:8490 öffnen und anmelden. Der Knopf „Jetzt einordnen“
 - `GET /api/einordnungen`: die Ergebnisse der Firma, neueste zuerst. Je Mail nur Verweis, Stand, Kategorie, Begründung, Art.-9-Verdacht ja/nein und die Nachweis-Nummer im Audit. Nie Betreff, Absender, Text oder Message-ID.
 - `GET /api/koepfe`: Absender, Betreff und Datum, live über den Pförtner (Fähigkeit `mail_kopf_lesen`, ohne Text). Nicht gespeichert, jeder Abruf steht im Audit. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`, weil er einen Abruf am Postfach auslöst.
 - `POST /api/einordnen`: startet das Einordnen. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`.
+- `GET /api/freigaben`: was auf einen Menschen wartet (siehe „Wartet auf Freigabe“).
+- `POST /api/freigaben/entscheiden` (`{"freigabe", "bestaetigt"}`): bestätigt oder lehnt ab. Nur mit der Kopfzeile `X-BoticStudio-Aktion: 1`.
+
+### Wartet auf Freigabe
+
+Braucht ein Schritt die Bestätigung eines Menschen, erscheint er oben im Dashboard mit den Knöpfen „Bestätigen“ und „Ablehnen“.
+
+- Die Liste kommt vom Pförtner (`/v1/freigaben/offen`). Dafür muss beim Dienst `dashboard` in der Datei der Dienste `"darf_freigeben": true` stehen (`echter_test` trägt es ein).
+- Was der Mensch dazu sieht (z. B. der Text, der hinausgehen würde), kommt aus dem Stand des wartenden Laufs. **Das Dashboard rechnet für jedes gezeigte Feld den Fingerabdruck nach** und vergleicht ihn mit dem, den der Pförtner zu dieser Freigabe gespeichert hat. Bestätigen geht nur, wenn jede Eingabe des Schritts gezeigt wird und stimmt. So kann niemand etwas anderes zeigen, als ausgeführt wird. Ablehnen geht immer.
+- Ob die angemeldete Person entscheiden darf (Admin oder Leitend), prüft der Pförtner, nicht das Dashboard.
+- Nach der Entscheidung stößt das Dashboard den Lauf im Hintergrund wieder an. Wie er ausging, steht in `GET /api/zustand` unter `letzte_fortsetzung`.
+- Mit `BOTICSTUDIO_ARBEITSDATEN` und `BOTICSTUDIO_ABLAUFSTAND_SCHLUESSEL_DATEI` überstehen wartende Läufe einen Neustart des Dashboards. Ohne den Schlüssel stehen sie nur im Arbeitsspeicher.
+
+Grenzen: Nachrechnen lässt sich bisher nur Text. Ein Schritt mit anderen Eingaben (Zahlen, Listen, Anhänge) lässt sich deshalb noch nicht bestätigen. Angezeigt werden die technischen Namen von Fähigkeit und Eingabe, verständliche Bezeichnungen fehlen noch. Die Liste lädt beim Öffnen der Seite und nach jeder Entscheidung, nicht laufend.
 
 ### Anmeldung
 
@@ -100,7 +114,7 @@ Die Zugangsdaten stehen nur in der Umgebung (`BOTICSTUDIO_TEST_IMAP_BENUTZER`, `
 python -m ablauf.echter_test --ordner /ausserhalb/des/repos/echt
 ```
 
-Das schreibt `tresor.json` (nur für den Besitzer lesbar), `firma.json` (Testfirma mit Erlaubnissen für genau dieses Postfach), `ablauf.json`, `dienste.json` und je einen eigenen Schlüssel `ablauf.schluessel` und `dashboard.schluessel`. Dann den Pförtner mit `-testdaten …/firma.json -tresor …/tresor.json -dienste …/dienste.json` starten, den Ablauf mit `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=…/ablauf.schluessel` und `--einstellungen …/ablauf.json`, das Dashboard mit `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=…/dashboard.schluessel`. Das Passwort wird nie ausgegeben, und der Ordner darf nicht im Repo liegen.
+Das schreibt `tresor.json` (nur für den Besitzer lesbar), `firma.json` (Testfirma mit Erlaubnissen für genau dieses Postfach), `ablauf.json`, `dienste.json` (nur das Dashboard darf Freigaben weitergeben), je einen eigenen Schlüssel `ablauf.schluessel` und `dashboard.schluessel` und den Schlüssel `ablaufstand.schluessel` für die Stände wartender Läufe (für `BOTICSTUDIO_ABLAUFSTAND_SCHLUESSEL_DATEI`). Dann den Pförtner mit `-testdaten …/firma.json -tresor …/tresor.json -dienste …/dienste.json` starten, den Ablauf mit `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=…/ablauf.schluessel` und `--einstellungen …/ablauf.json`, das Dashboard mit `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=…/dashboard.schluessel`. Das Passwort wird nie ausgegeben, und der Ordner darf nicht im Repo liegen.
 
 Für Google braucht das Postfach die Bestätigung in zwei Schritten und ein App-Passwort.
 

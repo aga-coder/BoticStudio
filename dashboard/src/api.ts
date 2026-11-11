@@ -60,6 +60,34 @@ export interface Ich {
   firma: string | null;
 }
 
+export interface FreigabeFeld {
+  name: string;
+  wert: string;
+  gekuerzt: boolean;
+  /** Das Dashboard hat nachgerechnet: Genau dieser Inhalt liegt dem Pförtner zur Freigabe vor. */
+  stimmt: boolean;
+}
+
+/** Ein Schritt, der auf die Bestätigung eines Menschen wartet. */
+export interface Freigabe {
+  id: string;
+  faehigkeit: string;
+  bereich: string;
+  ziel: string;
+  angefragt_fuer: string;
+  angefragt_am: string | null;
+  gueltig_bis: string | null;
+  lauf: string | null;
+  anzeige: FreigabeFeld[];
+  /** Nur dann lässt sich bestätigen: Alles, was ausgeführt würde, wird gezeigt und stimmt. */
+  geprueft: boolean;
+}
+
+export interface Freigaben {
+  freigaben: Freigabe[];
+  fehler: string;
+}
+
 /** Die Sitzung ist abgelaufen oder fehlt: zurück zur Anmeldung. */
 export class NichtAngemeldet extends Error {}
 
@@ -114,4 +142,17 @@ export async function starteEinordnen(): Promise<Zustand> {
     body: "{}",
   });
   return lies<Zustand>(antwort);
+}
+
+export async function holeFreigaben(): Promise<Freigaben> {
+  return lies<Freigaben>(await fetch("/api/freigaben"));
+}
+
+export async function entscheideFreigabe(freigabe: string, bestaetigt: boolean): Promise<Freigaben> {
+  const antwort = await fetch("/api/freigaben/entscheiden", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...AUS_DEM_DASHBOARD },
+    body: JSON.stringify({ freigabe, bestaetigt }),
+  });
+  return lies<Freigaben>(antwort);
 }

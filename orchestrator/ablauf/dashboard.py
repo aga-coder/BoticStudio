@@ -41,14 +41,17 @@ from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
 from .ablaeufe import MAIL_EINORDNEN, eingabe_aus, mail_einordnen
 from .einordnen import Einstellungen, _anfrage, _erlaubt, _grund
-from .orchestrator import Orchestrator
+from .orchestrator import LaufUnbekannt, Orchestrator
+from .stand import UMGEBUNG_SCHLUESSEL as UMGEBUNG_STAND
+from .stand import PostgresStaende, StandFehler, lies_schluessel as lies_stand_schluessel
 from .konten import Anmeldung, KontoFehler, PostgresKonten, Sitzung
-from .pfoertner import HttpPfoertner, Pfoertner, PfoertnerFehler
+from .pfoertner import FreigabeAbgewiesen, HttpPfoertner, Pfoertner, PfoertnerFehler, fingerabdruck
 from .speicher import Einordnung, ListenSpeicher, PostgresSpeicher, Speicher
 
 ADRESSE = "127.0.0.1"
@@ -76,6 +79,36 @@ def _kategorie_namen(kategorien: list[Any]) -> list[str]:
     return [k["name"] if isinstance(k, dict) else str(k) for k in kategorien]
 
 
+MAX_ANZEIGE = 20_000
+
+
+def _freigabe_zeile(f: dict[str, Any], lauf: Any, wartet: dict[str, Any] | None) -> dict[str, Any]:
+    """Was die Oberfläche zu einer Freigabe bekommt. Bewusst eine feste Auswahl."""
+    daten = f.get("daten") or {}
+    anzeige = (wartet or {}).get("anzeige") or {}
+    felder = []
+    for name in sorted(anzeige):
+        wert = anzeige[name]
+        # Nur Texte lassen sich bisher nachrechnen. Alles andere gilt als nicht geprüft.
+        stimmt = isinstance(wert, str) and name in daten and fingerabdruck(wert) == daten[name]
+        text = wert if isinstance(wert, str) else json.dumps(wert, ensure_ascii=False)
+        felder.append({"name": name, "wert": text[:MAX_ANZEIGE], "gekuerzt": len(text) > MAX_ANZEIGE, "stimmt": stimmt})
+    gezeigt = {x["name"] for x in felder if x["stimmt"]}
+    return {
+        "id": str(f.get("id", "")),
+        "faehigkeit": str(f.get("faehigkeit", "")),
+        "bereich": str(f.get("bereich", "")),
+        "ziel": str(f.get("ziel", "")),
+        "angefragt_fuer": str(f.get("person", "")),
+        "angefragt_am": f.get("angefragt_am"),
+        "gueltig_bis": f.get("gueltig_bis"),
+        "lauf": lauf.id if lauf else None,
+        "anzeige": felder,
+        # Geprüft: Es gibt den Lauf, und jede Eingabe des Schritts wird gezeigt und stimmt.
+        "geprueft": bool(lauf) and set(daten) <= gezeigt and all(x["stimmt"] for x in felder),
+    }
+
+
 def als_zeile(e: Einordnung) -> dict[str, Any]:
     """Was die Oberfläche zu einer Mail bekommt. Bewusst eine feste Auswahl."""
     return {
@@ -95,9 +128,21 @@ def als_zeile(e: Einordnung) -> dict[str, Any]:
 class Dashboard:
     """Hält den Zustand: läuft gerade ein Einordnen, wie ging das letzte aus."""
 
-    def __init__(self, pf: Pfoertner, speicher: Speicher, einst: Einstellungen, anmeldung: Anmeldung | None = None) -> None:
+    def __init__(
+        self,
+        pf: Pfoertner,
+        speicher: Speicher,
+        einst: Einstellungen,
+        anmeldung: Anmeldung | None = None,
+        *,
+        stand: Callable[[str], Any] | None = None,
+        weitere_ablaeufe: dict[str, Any] | None = None,
+    ) -> None:
         self.pf, self.speicher, self.einst = pf, speicher, einst
-        self.orchestrator = Orchestrator({MAIL_EINORDNEN: mail_einordnen(pf, speicher)})
+        # stand: wo wartende Läufe ihren Stand halten (siehe stand.py). Ohne Angabe nur im Arbeitsspeicher.
+        self.orchestrator = Orchestrator({MAIL_EINORDNEN: mail_einordnen(pf, speicher), **(weitere_ablaeufe or {})}, stand)
+        self._fortsetzung: dict[str, Any] | None = None
+        self._faeden: list[threading.Thread] = []
         # None: Testmodus ohne Anmeldung (nur ohne Datenbank).
         self.anmeldung = anmeldung
         self._sperre = threading.Lock()
@@ -113,6 +158,7 @@ class Dashboard:
                 "kategorien": _kategorie_namen(self.einst.kategorien),
                 "laeuft": self._laeuft,
                 "letzter_lauf": self._letzter,
+                "letzte_fortsetzung": self._fortsetzung,
             }
 
     def einordnungen(self) -> list[dict[str, Any]]:
@@ -147,6 +193,60 @@ class Dashboard:
             }
         return ergebnis
 
+    def freigaben(self, person: str | None = None) -> dict[str, Any]:
+        """Was auf einen Menschen wartet.
+
+        Die Liste kommt vom Pförtner. Was der Mensch dazu sehen soll, kommt aus
+        dem Stand des wartenden Laufs. Das Dashboard rechnet für jedes gezeigte
+        Feld den Fingerabdruck nach und vergleicht ihn mit dem, den der Pförtner
+        zu dieser Freigabe gespeichert hat. Nur wenn jede Eingabe des Schritts
+        gezeigt wird und stimmt, gilt die Freigabe als geprüft und lässt sich
+        bestätigen. So kann niemand etwas anderes zeigen, als ausgeführt wird.
+        """
+        try:
+            offen = self.pf.offene_freigaben(self.einst.firma, person or self.einst.person)
+            wartend = {w.get("freigabe_id"): (lauf, w) for lauf in self.orchestrator.wartende(self.einst.firma) for w in lauf.wartet_auf}
+        except (PfoertnerFehler, RuntimeError) as f:
+            return {"freigaben": [], "fehler": str(f)}
+        return {"freigaben": [_freigabe_zeile(f, *wartend.get(f.get("id"), (None, None))) for f in offen], "fehler": ""}
+
+    def entscheide(self, freigabe: str, bestaetigt: bool, person: str | None = None) -> dict[str, Any]:
+        """Gibt die Entscheidung eines Menschen an den Pförtner und stößt den Lauf wieder an.
+
+        Bestätigen geht nur für eine geprüfte Freigabe (siehe `freigaben`).
+        Ablehnen geht immer. Ob die Person entscheiden darf, prüft der Pförtner.
+        """
+        liste = self.freigaben(person)
+        if liste["fehler"]:
+            raise PfoertnerFehler(liste["fehler"])
+        zeile = next((f for f in liste["freigaben"] if f["id"] == freigabe), None)
+        if zeile is None:
+            raise FreigabeAbgewiesen("Diese Freigabe gibt es nicht (mehr).")
+        if bestaetigt and not zeile["geprueft"]:
+            raise FreigabeAbgewiesen("Diese Freigabe lässt sich nicht bestätigen: Das Dashboard kann nicht belegen, was genau ausgeführt würde.")
+        self.pf.entscheide_freigabe(self.einst.firma, freigabe, person or self.einst.person, bestaetigt)
+        if zeile["lauf"]:
+            faden = threading.Thread(target=self._setze_fort, args=(zeile["lauf"],), daemon=True)
+            self._faeden = [f for f in self._faeden if f.is_alive()] + [faden]
+            faden.start()
+        return self.freigaben(person)
+
+    def _setze_fort(self, lauf: str) -> None:
+        eintrag: dict[str, Any] = {"lauf": lauf, "ende": None, "stand": "", "abbruch": ""}
+        try:
+            eintrag["stand"] = self.orchestrator.setze_fort(self.einst.firma, lauf).stand
+        except PfoertnerFehler as f:
+            eintrag["abbruch"] = str(f)
+        except LaufUnbekannt:
+            eintrag["abbruch"] = "Der Lauf ist nicht mehr bekannt."
+        except Exception as f:  # noqa: BLE001
+            # Kein Text der Ausnahme nach außen: Er könnte Inhalte enthalten.
+            print(f"Fortsetzen abgebrochen: {type(f).__name__}", file=sys.stderr)
+            eintrag["abbruch"] = "Interner Fehler beim Fortsetzen."
+        eintrag["ende"] = _jetzt()
+        with self._sperre:
+            self._fortsetzung = eintrag
+
     def starte(self, person: str | None = None) -> bool:
         """Startet das Einordnen im Hintergrund. False, wenn es schon läuft."""
         with self._sperre:
@@ -159,8 +259,9 @@ class Dashboard:
         return True
 
     def warte(self, sekunden: float = 30) -> None:
-        if self._faden:
-            self._faden.join(sekunden)
+        for faden in [self._faden, *self._faeden]:
+            if faden:
+                faden.join(sekunden)
 
     def _lauf(self, einst: Einstellungen) -> None:
         bericht: dict[str, Any] | None = None
@@ -345,6 +446,8 @@ def baue_handler(db: Dashboard, port: int, oberflaeche: Path | None) -> type[Bas
                 # Löst einen Abruf am Postfach aus, deshalb wie der Knopf nur aus dem Dashboard.
                 if self._aus_dem_dashboard():
                     self._json(HTTPStatus.OK, db.koepfe(person))
+            elif pfad == "/api/freigaben":
+                self._json(HTTPStatus.OK, db.freigaben(person))
             elif pfad.startswith("/api/"):
                 self._json(HTTPStatus.NOT_FOUND, {"fehler": "Unbekannt."})
             else:
@@ -365,6 +468,9 @@ def baue_handler(db: Dashboard, port: int, oberflaeche: Path | None) -> type[Bas
             weiter, person = self._angemeldet()
             if not weiter:
                 return
+            if pfad == "/api/freigaben/entscheiden":
+                self._entscheiden(person)
+                return
             if pfad != "/api/einordnen":
                 self._json(HTTPStatus.NOT_FOUND, {"fehler": "Unbekannt."})
                 return
@@ -372,6 +478,25 @@ def baue_handler(db: Dashboard, port: int, oberflaeche: Path | None) -> type[Bas
                 self._json(HTTPStatus.CONFLICT, {"fehler": "Das Einordnen läuft schon."})
                 return
             self._json(HTTPStatus.ACCEPTED, db.zustand())
+
+        def _entscheiden(self, person: str | None) -> None:
+            daten = self._koerper()
+            if daten is None:
+                return
+            freigabe, bestaetigt = daten.get("freigabe"), daten.get("bestaetigt")
+            if not isinstance(freigabe, str) or not freigabe or not isinstance(bestaetigt, bool):
+                self._json(HTTPStatus.BAD_REQUEST, {"fehler": "Ungültige Anfrage."})
+                return
+            try:
+                antwort = db.entscheide(freigabe, bestaetigt, person)
+            except FreigabeAbgewiesen as f:
+                self._json(HTTPStatus.CONFLICT, {"fehler": str(f)})
+                return
+            except PfoertnerFehler as f:
+                self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"fehler": str(f)})
+                return
+            print(f"Freigabe {'bestätigt' if bestaetigt else 'abgelehnt'}: {db.einst.firma}/{person or db.einst.person}", file=sys.stderr)
+            self._json(HTTPStatus.OK, antwort)
 
         def _datei(self, pfad: str) -> None:
             if wurzel is None or not (wurzel / "index.html").is_file():
@@ -411,7 +536,17 @@ def main() -> int:
     konten = PostgresKonten(dsn) if dsn else None
     if not dsn:
         print("Ohne BOTICSTUDIO_ARBEITSDATEN: Testmodus ohne Anmeldung, Ergebnisse nur im Arbeitsspeicher.", file=sys.stderr)
-    db = Dashboard(pf, speicher, einst, Anmeldung(konten) if konten else None)
+    # Mit Datenbank und Schlüssel überstehen wartende Läufe einen Neustart.
+    staende = None
+    if dsn and os.environ.get(UMGEBUNG_STAND):
+        try:
+            staende = PostgresStaende(dsn, lies_stand_schluessel(os.environ[UMGEBUNG_STAND]))
+        except StandFehler as f:
+            print(f, file=sys.stderr)
+            return 2
+    else:
+        print(f"Ohne {UMGEBUNG_STAND}: Wartende Läufe stehen nur im Arbeitsspeicher und sind nach einem Neustart weg.", file=sys.stderr)
+    db = Dashboard(pf, speicher, einst, Anmeldung(konten) if konten else None, stand=staende.fuer if staende else None)
     server = ThreadingHTTPServer((ADRESSE, args.port), baue_handler(db, args.port, args.oberflaeche))
     print(f"Dashboard: http://{ADRESSE}:{args.port}", file=sys.stderr)
     try:
@@ -424,6 +559,8 @@ def main() -> int:
             speicher.schliesse()
         if konten:
             konten.schliesse()
+        if staende:
+            staende.schliesse()
     return 0
 
 
