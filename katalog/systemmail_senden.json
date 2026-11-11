@@ -1,0 +1,24 @@
+{
+  "fassung": 3,
+  "name": "systemmail_senden",
+  "version": "1.0.0",
+  "beschreibung": "Verschickt eine Mail von BoticStudio selbst, z. B. den Bestätigungslink bei der Registrierung. Es gibt nur feste Textvorlagen: Der Aufrufer nennt Vorlage, Empfänger und die Werte für die Lücken, freien Text kann er nicht senden. Empfängeradresse und Mailtext gehen an den Mailserver des Absender-Postfachs. Liest keine Mails und hat nichts mit den Postfächern der Kunden zu tun.",
+  "eingaben": [
+    "vorlage",
+    "empfaenger",
+    "werte"
+  ],
+  "ausgaben": [
+    "gesendet",
+    "message_id"
+  ],
+  "recht": "systemmail.senden",
+  "bereich": "systempost/absender",
+  "risiko": "mittel",
+  "wirkt_nach_aussen": true,
+  "datenausgang": [
+    "mailserver"
+  ],
+  "zugang": "systempost",
+  "braucht_vorpruefung": []
+}

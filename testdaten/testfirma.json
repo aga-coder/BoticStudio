@@ -11,11 +11,39 @@
           "einwilligung_am": "2026-10-22T20:00:00Z"
         }
       ]
+    },
+    {
+      "id": "boticstudio-plattform",
+      "ziele": [
+        {
+          "art": "mailserver",
+          "adresse": "smtp.example.org",
+          "region": "eu"
+        }
+      ]
     }
   ],
   "personen": [
-    { "id": "anna", "firma": "testfirma-mueller", "rolle": "admin" },
-    { "id": "ben", "firma": "testfirma-mueller", "rolle": "ausfuehrend" }
+    {
+      "id": "anna",
+      "firma": "testfirma-mueller",
+      "rolle": "admin"
+    },
+    {
+      "id": "ben",
+      "firma": "testfirma-mueller",
+      "rolle": "ausfuehrend"
+    },
+    {
+      "id": "galip",
+      "firma": "boticstudio-plattform",
+      "rolle": "admin"
+    },
+    {
+      "id": "registrierung",
+      "firma": "boticstudio-plattform",
+      "rolle": "ausfuehrend"
+    }
   ],
   "erlaubnisse": [
     {
@@ -33,6 +61,14 @@
       "bereich": "postfach/info@mueller-test.de",
       "dauer": "dauerhaft",
       "erteilt_von": "anna"
+    },
+    {
+      "id": "p1",
+      "firma": "boticstudio-plattform",
+      "recht": "systemmail.senden",
+      "bereich": "systempost/konto@boticstudio.de",
+      "dauer": "dauerhaft",
+      "erteilt_von": "galip"
     }
   ]
 }

@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        modul: [mail_lesen, besondere_daten_pruefen, mail_einordnen]
+        modul: [mail_lesen, besondere_daten_pruefen, mail_einordnen, systemmail_senden]
     defaults:
       run:
         working-directory: faehigkeiten/${{ matrix.modul }}
