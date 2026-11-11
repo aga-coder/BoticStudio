@@ -1,0 +1,37 @@
+{
+  "hinweis": "Texte und ihr Fingerabdruck, wie der Pförtner ihn bildet. Der Kernel-Test und der Dashboard-Test prüfen beide gegen diese Datei.",
+  "beispiele": [
+    {
+      "fingerabdruck": "sha256:12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "text": ""
+    },
+    {
+      "fingerabdruck": "sha256:d140fb647a21404cf2c417106f9c9e6b233c6866fafd5e8729ad6ab1afaaf4e2",
+      "text": "Guten Tag"
+    },
+    {
+      "fingerabdruck": "sha256:e3d507d77c489807a799a4a4f361c2271de0748ea050b9605336919b4fe9fa0f",
+      "text": "Grüße aus Augsburg, 5 € Rabatt"
+    },
+    {
+      "fingerabdruck": "sha256:268a2152450f1ccc9fff86d027da7f161c1794f313c8436ede5be4280dd4cf8c",
+      "text": "Zeile 1\nZeile 2\r\n\tTab"
+    },
+    {
+      "fingerabdruck": "sha256:e2a84ec6c620fedb4714d3ff844eb4e9cd1f4f243b1764ac49822887a2818171",
+      "text": "<b>fett</b> & \"Zitat\" \\ Schrägstrich"
+    },
+    {
+      "fingerabdruck": "sha256:a81744e738b0da50f24025990148f1cebed1377a10455d9517c8e45d7ed95557",
+      "text": "Steuerzeichen \u0001 \u001f \b \f und "
+    },
+    {
+      "fingerabdruck": "sha256:59e48db9a32859e7db2b4b9f15f9b740c14828abac0d385c2c6e35bab7921ed8",
+      "text": "Trenner \u2028 und \u2029"
+    },
+    {
+      "fingerabdruck": "sha256:d1d0ab387edb895296d5832e4d57f5e4ddc708745e32e1e0a0447b696ccd0137",
+      "text": "Emoji 😀 und 漢字"
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
+  entscheideFreigabe,
   holeEinordnungen,
+  holeFreigaben,
   holeIch,
   holeKoepfe,
   holeZustand,
@@ -8,6 +10,7 @@ import {
   meldeAn,
   NichtAngemeldet,
   starteEinordnen,
+  type Freigabe,
   type Ich,
   type Koepfe,
   type Kopf,
@@ -98,6 +101,53 @@ function Eintrag({ z, kopf, koepfeGeladen }: { z: Zeile; kopf?: Kopf; koepfeGela
         Mail-Nr. {z.uid} in {postfachName(z.bereich)}
         {z.nachweis != null && <> · Nachweis Nr. {z.nachweis}</>}
       </p>
+    </li>
+  );
+}
+
+function FreigabeKarte({ f, entscheide, sendet }: { f: Freigabe; entscheide: (bestaetigt: boolean) => void; sendet: boolean }) {
+  return (
+    <li className="eintrag freigabe">
+      <div className="eintrag-kopf">
+        <span className="marke marke-nicht_eingeordnet">Wartet auf Freigabe</span>
+        <span className="zeit">{zeit(f.angefragt_am)}</span>
+      </div>
+      <p className="betreff">
+        {f.faehigkeit}
+        {f.bereich && <> in {f.bereich}</>}
+        {f.ziel && <> an {f.ziel}</>}
+      </p>
+      <p className="absender">
+        Angefragt für {f.angefragt_fuer}
+        {f.gueltig_bis && <> · entscheidbar bis {zeit(f.gueltig_bis)}</>}
+      </p>
+      {f.anzeige.map((feld) => (
+        <div key={feld.name} className="freigabe-feld">
+          <p className="freigabe-name">
+            {feld.name}
+            {!feld.stimmt && <span className="freigabe-warnung"> · stimmt nicht mit dem Pförtner überein</span>}
+          </p>
+          <pre className="freigabe-wert">{feld.wert}</pre>
+          {feld.gekuerzt && <p className="hinweis">Gekürzt angezeigt.</p>}
+        </div>
+      ))}
+      {f.geprueft ? (
+        <p className="hinweis">Geprüft: Genau das wird ausgeführt, einmal. Ändert sich etwas daran, wird neu gefragt.</p>
+      ) : (
+        <p className="hinweis hinweis-art9" role="status">
+          {f.lauf
+            ? "Das Dashboard kann nicht belegen, was genau ausgeführt würde. Bestätigen ist deshalb gesperrt."
+            : "Der zugehörige Lauf ist nicht mehr bekannt. Bestätigen ist deshalb gesperrt."}
+        </p>
+      )}
+      <div className="freigabe-knoepfe">
+        <button className="knopf" disabled={sendet || !f.geprueft} onClick={() => entscheide(true)}>
+          Bestätigen
+        </button>
+        <button className="knopf knopf-leise" disabled={sendet} onClick={() => entscheide(false)}>
+          Ablehnen
+        </button>
+      </div>
     </li>
   );
 }
@@ -201,6 +251,9 @@ function Posteingang({ ich, abmelden, abgelaufen }: { ich: Ich; abmelden?: () =>
   const [fehler, setFehler] = useState("");
   const [filter, setFilter] = useState<Filter>({ art: "alle" });
   const [koepfe, setKoepfe] = useState<Koepfe | null>(null);
+  const [freigaben, setFreigaben] = useState<Freigabe[]>([]);
+  const [freigabeFehler, setFreigabeFehler] = useState("");
+  const [entscheidet, setEntscheidet] = useState(false);
 
   // Ist die Sitzung abgelaufen, geht es zurück zur Anmeldung statt zu einer Fehlermeldung.
   const zeigeFehler = useCallback(
@@ -222,6 +275,35 @@ function Posteingang({ ich, abmelden, abgelaufen }: { ich: Ich; abmelden?: () =>
     }
   }, [abgelaufen]);
 
+  // Freigaben kommen getrennt: Sind sie nicht abrufbar, bleibt der Posteingang trotzdem sichtbar.
+  const ladeFreigaben = useCallback(async () => {
+    try {
+      const f = await holeFreigaben();
+      setFreigaben(f.freigaben);
+      setFreigabeFehler(f.fehler);
+    } catch (f) {
+      if (f instanceof NichtAngemeldet) return abgelaufen();
+      setFreigabeFehler(f instanceof Error ? f.message : "Nicht erreichbar.");
+    }
+  }, [abgelaufen]);
+
+  const entscheide = async (id: string, bestaetigt: boolean) => {
+    setEntscheidet(true);
+    try {
+      const f = await entscheideFreigabe(id, bestaetigt);
+      setFreigaben(f.freigaben);
+      setFreigabeFehler(f.fehler);
+    } catch (f) {
+      if (f instanceof NichtAngemeldet) return abgelaufen();
+      // Die Liste neu holen (sie kann sich geändert haben), der Grund bleibt stehen.
+      const liste = await holeFreigaben().catch(() => null);
+      if (liste) setFreigaben(liste.freigaben);
+      setFreigabeFehler(f instanceof Error ? f.message : "Die Entscheidung ließ sich nicht speichern.");
+    } finally {
+      setEntscheidet(false);
+    }
+  };
+
   const lade = useCallback(async () => {
     try {
       const [z, e] = await Promise.all([holeZustand(), holeEinordnungen()]);
@@ -229,10 +311,11 @@ function Posteingang({ ich, abmelden, abgelaufen }: { ich: Ich; abmelden?: () =>
       setZeilen(e);
       setFehler("");
       if (e.length) void ladeKoepfe();
+      void ladeFreigaben();
     } catch (f) {
       zeigeFehler(f, "Der Dienst ist nicht erreichbar.");
     }
-  }, [ladeKoepfe, zeigeFehler]);
+  }, [ladeKoepfe, ladeFreigaben, zeigeFehler]);
 
   useEffect(() => {
     void lade();
@@ -308,6 +391,22 @@ function Posteingang({ ich, abmelden, abgelaufen }: { ich: Ich; abmelden?: () =>
         </p>
       )}
       {zustand && <LaufZeile lauf={zustand.letzter_lauf} laeuft={laeuft} />}
+
+      {(freigaben.length > 0 || freigabeFehler) && (
+        <section className="freigaben" aria-label="Wartet auf Freigabe">
+          <h2>Wartet auf Freigabe{freigaben.length > 0 && ` (${freigaben.length})`}</h2>
+          {freigabeFehler && (
+            <p className="lauf lauf-hinweis" role="status">
+              {freigabeFehler}
+            </p>
+          )}
+          <ul className="liste">
+            {freigaben.map((f) => (
+              <FreigabeKarte key={f.id} f={f} sendet={entscheidet} entscheide={(b) => void entscheide(f.id, b)} />
+            ))}
+          </ul>
+        </section>
+      )}
 
       <nav className="kacheln" aria-label="Nach Kategorie filtern">
         {kacheln.map((k) => {

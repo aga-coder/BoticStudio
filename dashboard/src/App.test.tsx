@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
-import type { Ich, Koepfe, Zeile, Zustand } from "./api";
+import type { Freigabe, Ich, Koepfe, Zeile, Zustand } from "./api";
 
 const ZUSTAND: Zustand = {
   firma: "testfirma",
@@ -29,6 +29,14 @@ let koepfe: Koepfe;
 let ich: Ich;
 let angemeldet: boolean;
 let aufrufe: { pfad: string; init?: RequestInit }[];
+let freigaben: Freigabe[];
+let freigabeAntwort: { status: number; fehler: string } | null;
+
+const FREIGABE: Freigabe = {
+  id: "f-1", faehigkeit: "probe_melden", bereich: "kanal/probe", ziel: "", angefragt_fuer: "ben",
+  angefragt_am: "2026-11-11T18:00:00Z", gueltig_bis: "2026-11-18T18:00:00Z", lauf: "probe-1",
+  anzeige: [{ name: "text", wert: "Guten Tag,\nIhr Angebot liegt bei.", gekuerzt: false, stimmt: true }], geprueft: true,
+};
 
 beforeEach(() => {
   zustand = { ...ZUSTAND };
@@ -38,6 +46,8 @@ beforeEach(() => {
     fehler: "",
   };
   aufrufe = [];
+  freigaben = [];
+  freigabeAntwort = null;
   // Standard: Testmodus ohne Anmeldung.
   ich = { anmeldung_noetig: false, angemeldet: false, person: "p", firma: "testfirma" };
   angemeldet = true;
@@ -59,6 +69,13 @@ beforeEach(() => {
     if (pfad === "/api/zustand") return json(zustand);
     if (pfad === "/api/einordnungen") return json({ einordnungen: ZEILEN });
     if (pfad === "/api/koepfe") return json(koepfe);
+    if (pfad === "/api/freigaben") return json({ freigaben, fehler: "" });
+    if (pfad === "/api/freigaben/entscheiden") {
+      if (freigabeAntwort) return json({ fehler: freigabeAntwort.fehler }, freigabeAntwort.status);
+      const { freigabe } = JSON.parse(String(init?.body));
+      freigaben = freigaben.filter((f) => f.id !== freigabe);
+      return json({ freigaben, fehler: "" });
+    }
     if (pfad === "/api/einordnen") {
       zustand = { ...zustand, laeuft: true };
       return json(zustand, 202);
@@ -202,4 +219,54 @@ test("im Testmodus gibt es keinen Abmelden-Knopf", async () => {
   render(<App />);
   await screen.findByText("Kunde möchte ein Angebot.");
   expect(screen.queryByRole("button", { name: "Abmelden" })).toBeNull();
+});
+
+test("ohne wartende Schritte gibt es keinen Abschnitt für Freigaben", async () => {
+  render(<App />);
+  await screen.findByText("Kunde möchte ein Angebot.");
+  expect(screen.queryByRole("region", { name: "Wartet auf Freigabe" })).toBeNull();
+});
+
+test("zeigt, was ausgeführt würde, und Bestätigen geht mit eigener Kopfzeile hinaus", async () => {
+  freigaben = [FREIGABE];
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "Wartet auf Freigabe (1)" })).toBeTruthy();
+  expect(screen.getByText(/Ihr Angebot liegt bei\./)).toBeTruthy();
+  expect(screen.getByText(/probe_melden in kanal\/probe/)).toBeTruthy();
+  expect(screen.getByText(/Angefragt für ben/)).toBeTruthy();
+  expect(screen.getByText(/Genau das wird ausgeführt, einmal/)).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
+  await waitFor(() => expect(screen.queryByRole("heading", { name: /Wartet auf Freigabe/ })).toBeNull());
+  const aufruf = aufrufe.find((a) => a.pfad === "/api/freigaben/entscheiden")!;
+  expect(JSON.parse(String(aufruf.init?.body))).toEqual({ freigabe: "f-1", bestaetigt: true });
+  expect((aufruf.init?.headers as Record<string, string>)["X-BoticStudio-Aktion"]).toBe("1");
+});
+
+test("Ablehnen sendet bestaetigt: false", async () => {
+  freigaben = [FREIGABE];
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Ablehnen" }));
+  await waitFor(() => expect(screen.queryByRole("heading", { name: /Wartet auf Freigabe/ })).toBeNull());
+  const aufruf = aufrufe.find((a) => a.pfad === "/api/freigaben/entscheiden")!;
+  expect(JSON.parse(String(aufruf.init?.body))).toEqual({ freigabe: "f-1", bestaetigt: false });
+});
+
+test("nicht geprüfte Freigabe: Bestätigen gesperrt, Ablehnen möglich", async () => {
+  freigaben = [{ ...FREIGABE, geprueft: false, anzeige: [{ ...FREIGABE.anzeige[0], stimmt: false }] }];
+  render(<App />);
+  const bestaetigen = (await screen.findByRole("button", { name: "Bestätigen" })) as HTMLButtonElement;
+  expect(bestaetigen.disabled).toBe(true);
+  expect(screen.getByText(/stimmt nicht mit dem Pförtner überein/)).toBeTruthy();
+  expect(screen.getByText(/Bestätigen ist deshalb gesperrt/)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Ablehnen" }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("abgewiesene Entscheidung zeigt den Grund und lässt die Freigabe stehen", async () => {
+  freigaben = [FREIGABE];
+  freigabeAntwort = { status: 409, fehler: "Nur leitende Personen können bestätigen oder ablehnen." };
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Bestätigen" }));
+  expect(await screen.findByText("Nur leitende Personen können bestätigen oder ablehnen.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Bestätigen" })).toBeTruthy();
 });

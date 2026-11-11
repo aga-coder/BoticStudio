@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 from ablauf.geheimdatei import schreibe_geheim
+from ablauf.stand import neuer_schluessel
 
 FIRMA = "testfirma-echt"
 WURZEL = Path(__file__).resolve().parents[2]
@@ -46,9 +47,16 @@ def _lege_dienste_an(ordner: Path) -> dict[str, str]:
         schluessel = secrets.token_urlsafe(32)
         pfad = ordner / f"{name}.schluessel"
         _schreibe_geheim(pfad, schluessel)
-        eintraege.append({"name": name, "schluessel_sha256": hashlib.sha256(schluessel.encode()).hexdigest(), "firmen": [FIRMA]})
+        eintrag = {"name": name, "schluessel_sha256": hashlib.sha256(schluessel.encode()).hexdigest(), "firmen": [FIRMA]}
+        if name == "dashboard":
+            # Nur das Dashboard meldet Menschen an, also darf nur es Freigaben weitergeben.
+            eintrag["darf_freigeben"] = True
+        eintraege.append(eintrag)
         pfade[f"schluessel_{name}"] = str(pfad)
     (ordner / "dienste.json").write_text(json.dumps({"dienste": eintraege}, indent=2), encoding="utf-8")
+    # Schlüssel, mit dem der Orchestrator die Stände wartender Läufe verschlüsselt.
+    _schreibe_geheim(ordner / "ablaufstand.schluessel", neuer_schluessel())
+    pfade["schluessel_ablaufstand"] = str(ordner / "ablaufstand.schluessel")
     return {"dienste": str(ordner / "dienste.json"), **pfade}
 
 

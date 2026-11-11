@@ -105,6 +105,10 @@ class _FirmenChiffre(CipherProtocol):
 class ArbeitsspeicherStand(InMemorySaver):
     """Für Tests und den Betrieb ohne Datenbank. Nach einem Neustart ist alles weg."""
 
+    def laeufe(self) -> list[str]:
+        """Alle Läufe mit Stand, egal welcher Firma. Der Orchestrator zeigt nur die der eigenen."""
+        return [lauf for lauf, zweige in list(self.storage.items()) if zweige]
+
 
 class PostgresStaende:
     """Eine Verbindung für alle Firmen. `fuer(firma)` gibt den Stand-Speicher einer Firma."""

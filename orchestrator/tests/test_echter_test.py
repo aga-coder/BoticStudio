@@ -46,3 +46,13 @@ def test_legt_dienste_mit_eigenen_schluesseln_an(tmp_path):
     assert schluessel["ablauf"] != schluessel["dashboard"]
     for s in schluessel.values():
         assert s not in open(pfade["dienste"]).read() and s not in json.dumps(pfade)
+
+
+def test_nur_das_dashboard_darf_freigeben_und_stand_schluessel(tmp_path):
+    from ablauf.stand import lies_schluessel
+
+    pfade = bereite_vor(tmp_path / "echt", {"BOTICSTUDIO_TEST_IMAP_BENUTZER": "x@web.de", "BOTICSTUDIO_TEST_IMAP_PASSWORT": "geheim-geheim"})
+    dienste = {d["name"]: d for d in json.loads(open(pfade["dienste"]).read())["dienste"]}
+    assert dienste["dashboard"].get("darf_freigeben") is True
+    assert "darf_freigeben" not in dienste["ablauf"]
+    assert len(lies_schluessel(pfade["schluessel_ablaufstand"])) == 32

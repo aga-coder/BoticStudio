@@ -109,3 +109,16 @@ h1 { margin: 0; font-size: 1.6rem; }
   border: 1px solid var(--linie); background: var(--grund); color: var(--text);
 }
 .anmelden .lauf { margin: 0; }
+
+.freigaben { margin: 20px 0 0; }
+.freigaben h2 { margin: 0 0 10px; font-size: 1.15rem; }
+.freigabe { border-color: var(--hand); }
+.freigabe-feld { margin: 10px 0 0; }
+.freigabe-name { margin: 0; font-size: 0.875rem; color: var(--leise); }
+.freigabe-warnung { color: var(--fehler); font-weight: 600; }
+.freigabe-wert {
+  margin: 4px 0 0; padding: 10px 12px; background: var(--grund); border: 1px solid var(--linie); border-radius: 8px;
+  font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto;
+}
+.freigabe-knoepfe { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0 0; }
+.knopf-leise { background: none; color: var(--text); border: 1px solid var(--linie); }
