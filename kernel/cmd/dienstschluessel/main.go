@@ -69,6 +69,12 @@ func lege(name, firmenListe, dienstdatei, ausgabe string) error {
 	if err != nil {
 		return fmt.Errorf("schlüsseldatei: %w", err)
 	}
+	// Erst absperren, dann den Schlüssel hineinschreiben. Klappt das nicht: Datei weg.
+	if err := machePrivat(ausgabe); err != nil {
+		f.Close()
+		os.Remove(ausgabe)
+		return err
+	}
 	if _, err := f.WriteString(schluessel); err != nil {
 		f.Close()
 		return err

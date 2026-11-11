@@ -9,7 +9,7 @@ from ablauf.konten import (
 
 SCHNELL = partial(hashe_passwort, n=2**10)  # nur für Tests, im Betrieb 2^17
 PASSWORT = "richtig-langes-Passwort"
-NEIN = "Anmeldung fehlgeschlagen"
+NEIN = "Anmeldung fehlgeschlagen. Entweder stimmen E-Mail oder Passwort nicht, oder die Anmeldung ist nach 5 Fehlversuchen für 15 Minuten gesperrt."
 
 
 @pytest.fixture

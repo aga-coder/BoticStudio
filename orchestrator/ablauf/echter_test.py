@@ -1,7 +1,7 @@
 """Bereitet einen Durchlauf mit einem echten Test-Postfach vor.
 
 Liest die Zugangsdaten aus der Umgebung und schreibt in einen lokalen Ordner:
-  tresor.json  Zugang zum Postfach (nur für den Besitzer lesbar, 0600)
+  tresor.json  Zugang zum Postfach (nur für den Besitzer lesbar: 0600, unter Windows per Zugriffsliste)
   firma.json   Testfirma mit Erlaubnissen für genau dieses Postfach
   ablauf.json  Einstellungen für den Ablauf
   dienste.json Dienste, die den Pförtner aufrufen dürfen (nur SHA-256 der Schlüssel)
@@ -25,6 +25,8 @@ import secrets
 import sys
 from pathlib import Path
 
+from ablauf.geheimdatei import schreibe_geheim
+
 FIRMA = "testfirma-echt"
 WURZEL = Path(__file__).resolve().parents[2]
 
@@ -33,10 +35,8 @@ DIENSTE = ("ablauf", "dashboard")
 
 
 def _schreibe_geheim(pfad: Path, inhalt: str) -> None:
-    fd = os.open(pfad, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(inhalt)
-    os.chmod(pfad, 0o600)
+    # Unter Windows wirkt 0600 nicht; schreibe_geheim setzt dort die Zugriffsliste.
+    schreibe_geheim(pfad, inhalt)
 
 
 def _lege_dienste_an(ordner: Path) -> dict[str, str]:

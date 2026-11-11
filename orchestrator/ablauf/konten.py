@@ -26,6 +26,12 @@ from typing import Protocol
 MIN_LAENGE = 12
 MAX_FEHLVERSUCHE = 5
 SPERRE = timedelta(minutes=15)
+# Ein Text für jeden Fehlschlag: verrät nicht, ob es die Adresse gibt oder ob gesperrt ist,
+# sagt aber vorab, ab wann gesperrt wird (vorher als "schon gesperrt" missverstanden).
+FEHLTEXT = (
+    "Anmeldung fehlgeschlagen. Entweder stimmen E-Mail oder Passwort nicht, oder die Anmeldung "
+    f"ist nach {MAX_FEHLVERSUCHE} Fehlversuchen für {SPERRE.seconds // 60} Minuten gesperrt."
+)
 LAUFZEIT = timedelta(hours=8)
 LEERLAUF = timedelta(minutes=60)
 
@@ -141,7 +147,7 @@ class Anmeldung:
     def melde_an(self, email: str, passwort: str, jetzt: datetime | None = None) -> tuple[Sitzung, str]:
         """Liefert Sitzung und Cookie-Wert. Jeder Fehler hat denselben Text."""
         jetzt = jetzt or _jetzt()
-        nein = KontoFehler("Anmeldung fehlgeschlagen. Nach mehreren Fehlversuchen ist das Konto 15 Minuten gesperrt.")
+        nein = KontoFehler(FEHLTEXT)
         treffer = self.speicher.finde_firma(email_hash(email))
         konto = self.speicher.konto(*treffer) if treffer else None
         if konto is None:
