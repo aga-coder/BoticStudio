@@ -36,7 +36,6 @@ import os
 import sys
 import threading
 import uuid
-from dataclasses import asdict
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
@@ -45,7 +44,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from .einordnen import Einstellungen, _anfrage, _erlaubt, _grund, ordne_postfach_ein
+from .ablaeufe import MAIL_EINORDNEN, eingabe_aus, mail_einordnen
+from .einordnen import Einstellungen, _anfrage, _erlaubt, _grund
+from .orchestrator import Orchestrator
 from .konten import Anmeldung, KontoFehler, PostgresKonten, Sitzung
 from .pfoertner import HttpPfoertner, Pfoertner, PfoertnerFehler
 from .speicher import Einordnung, ListenSpeicher, PostgresSpeicher, Speicher
@@ -96,6 +97,7 @@ class Dashboard:
 
     def __init__(self, pf: Pfoertner, speicher: Speicher, einst: Einstellungen, anmeldung: Anmeldung | None = None) -> None:
         self.pf, self.speicher, self.einst = pf, speicher, einst
+        self.orchestrator = Orchestrator({MAIL_EINORDNEN: mail_einordnen(pf, speicher)})
         # None: Testmodus ohne Anmeldung (nur ohne Datenbank).
         self.anmeldung = anmeldung
         self._sperre = threading.Lock()
@@ -164,9 +166,9 @@ class Dashboard:
         bericht: dict[str, Any] | None = None
         abbruch = ""
         try:
-            b = ordne_postfach_ein(self.pf, self.speicher, einst)
-            bericht = {k: v for k, v in asdict(b).items() if k != "abbruch"}
-            abbruch = b.abbruch
+            b = self.orchestrator.starte(MAIL_EINORDNEN, einst.firma, einst.person, eingabe_aus(einst)).ergebnis
+            bericht = {k: v for k, v in b.items() if k != "abbruch"}
+            abbruch = b.get("abbruch", "")
         except PfoertnerFehler as f:
             abbruch = str(f)
         except Exception as f:  # noqa: BLE001

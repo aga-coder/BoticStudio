@@ -59,8 +59,9 @@ def _grund(antwort: dict[str, Any]) -> str:
     return antwort.get("fehler") or antwort.get("entscheidung", {}).get("grund") or "Unbekannter Grund."
 
 
-def ordne_postfach_ein(pf: Pfoertner, speicher: Speicher, e: Einstellungen) -> Bericht:
-    aufgabe = "einordnen-" + uuid.uuid4().hex[:12]
+def ordne_postfach_ein(pf: Pfoertner, speicher: Speicher, e: Einstellungen, aufgabe: str = "") -> Bericht:
+    # Im Orchestrator ist die Aufgabe der Lauf. Ohne ihn bekommt sie eine eigene Nummer.
+    aufgabe = aufgabe or "einordnen-" + uuid.uuid4().hex[:12]
     bericht = Bericht(aufgabe=aufgabe)
 
     gelesen = pf.fuehre(

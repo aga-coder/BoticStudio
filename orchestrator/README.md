@@ -1,8 +1,31 @@
-# Ablauf (Vorstufe des Orchestrators)
+# Orchestrator
 
-Ein kleiner Ablauf-Starter für den ersten Ablauf: Mails eines Postfachs **lesen → auf besondere Daten prüfen → einordnen**. Der richtige Orchestrator (Python, LangGraph) kommt später und ersetzt diesen Starter.
+Der Orchestrator führt feste Abläufe Schritt für Schritt aus (Python, LangGraph). Er ersetzt den früheren Ablauf-Starter. Das Paket heißt weiter `ablauf`.
 
-- Jeder Schritt geht an den Pförtner (`/v1/ausfuehren`), mit dem eigenen Schlüssel des Dienstes aus der Datei in `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI` (siehe kernel/README.md, „Wer anfragen darf“). Der Ablauf entscheidet nichts selbst. Auch eine Mail mit Art.-9-Verdacht legt er zum Einordnen vor: Der Pförtner lehnt ab, und die Ablehnung steht in seinem Audit.
+- **Jeder Schritt geht an den Pförtner** (`/v1/ausfuehren`), mit dem eigenen Schlüssel des Dienstes aus der Datei in `BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI` (siehe kernel/README.md, „Wer anfragen darf“). Der Orchestrator entscheidet nichts selbst.
+- **Freigabe durch einen Menschen:** Sagt der Pförtner „wartet“, hält der Lauf an und nennt die Freigabe (`freigabe_id`) und was ein Mensch dazu sehen soll (`anzeige`). Nach der Entscheidung macht `Orchestrator.setze_fort(firma, lauf)` dort weiter: Er legt dem Pförtner denselben Schritt mit denselben Daten noch einmal vor. Ob der Schritt jetzt läuft, sagt allein der Pförtner. Der Orchestrator kann sich keine Zustimmung geben, sein Schlüssel wird beim Entscheiden abgewiesen (siehe kernel/README.md, „Freigabe durch einen Menschen“).
+- **Stand eines Laufs (Checkpoint):** Damit ein wartender Lauf einen Neustart übersteht, steht sein Stand in PostgreSQL (`arbeit.ablaufstaende`, `arbeit.ablaufschritte`). Getrennt nach Firma mit Row-Level Security, der Inhalt verschlüsselt mit AES-256-GCM und an die Firma gebunden. Ist der Lauf fertig, wird der Stand gelöscht. Details in `ablauf/stand.py`.
+- **Der Lauf ist die Aufgabe beim Pförtner.** Stoppen (`/v1/stoppen`) und die Obergrenze an Schritten gelten damit je Lauf.
+
+Dateien: `orchestrator.py` (Läufe starten und fortsetzen, der Baustein `schritt`), `ablaeufe.py` (die festen Abläufe), `stand.py` (Stände), `einordnen.py` (Ablauf 1).
+
+## Was er noch nicht kann
+
+- Er sucht sich keine Fähigkeiten selbst aus dem Katalog und plant nichts mit einem KI-Modell. Abläufe sind fest beschrieben.
+- Das Dashboard zeigt wartende Läufe noch nicht. Dashboard und Befehlszeile nutzen den Stand in PostgreSQL noch nicht (nächster Schritt) und halten Stände bis dahin nur im Arbeitsspeicher. Ablauf 1 hat ohnehin keine Stelle, an der ein Mensch bestätigen muss.
+- Die Freigabe ist nur mit einem Probe-Ablauf in den Tests belegt. Im Katalog gibt es noch keine Fähigkeit, die nach außen wirkt.
+- Ein Schlüssel für die Stände gilt für alle Firmen. Je Firma ein eigener aus dem Schlüsseldienst (STACKIT KMS) kommt mit dem Hosting. Einen Schlüsselwechsel gibt es noch nicht.
+- Wartende Läufe räumt noch niemand auf, wenn ihre Freigabe abläuft.
+
+## Regel für neue Abläufe
+
+In den Zustand eines Laufs gehört nur, was zum Weitermachen nötig ist. Mailtexte bleiben innerhalb eines Schritts und kommen nie in den Zustand. Ein Schritt beginnt beim Fortsetzen von vorn, er darf also vor dem Aufruf des Pförtners nichts tun, was nicht wiederholt werden darf.
+
+## Ablauf 1: Postfach einordnen
+
+Mails eines Postfachs **lesen → auf besondere Daten prüfen → einordnen**, als ein einziger Schritt im Graphen, damit keine Mail in den gespeicherten Stand gerät.
+
+- Auch eine Mail mit Art.-9-Verdacht legt er zum Einordnen vor: Der Pförtner lehnt ab, und die Ablehnung steht in seinem Audit.
 - Prüfen und Einordnen bekommen dieselbe, unveränderte Mail. Daran erkennt der Pförtner, dass sie vorgeprüft ist.
 - Ergebnisse landen in `arbeit.einordnungen` (Rolle `boticstudio_ablauf`, Row-Level Security je Firma). Gespeichert wird nur ein **Verweis** auf die Mail (Bereich, UID, Message-ID), Stand, Kategorie, Begründung, Markierungen und Modell. Nie Betreff, Absender oder Text.
 - Ausgegeben werden nur Zahlen.
@@ -23,6 +46,12 @@ BOTICSTUDIO_DIENSTSCHLUESSEL_DATEI=/ausserhalb/des/repos/ablauf.schluessel \
 ```
 
 Ohne `BOTICSTUDIO_ARBEITSDATEN` werden die Ergebnisse nur gezählt, nicht gespeichert.
+
+Schlüssel für die Stände anlegen (einmal, außerhalb des Repos, nur für den eigenen Benutzer lesbar):
+
+```sh
+python -m ablauf.stand --neu /ausserhalb/des/repos/ablaufstand.schluessel
+```
 
 ## Dashboard
 
