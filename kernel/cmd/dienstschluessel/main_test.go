@@ -12,18 +12,18 @@ import (
 func TestLegeUndErsetze(t *testing.T) {
 	ordner := t.TempDir()
 	datei := filepath.Join(ordner, "dienste.json")
-	if err := lege("dashboard", "a,b", datei, filepath.Join(ordner, "d1")); err != nil {
+	if err := lege("dashboard", "a,b", datei, filepath.Join(ordner, "d1"), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := lege("ablauf", "a", datei, filepath.Join(ordner, "a1")); err != nil {
+	if err := lege("ablauf", "a", datei, filepath.Join(ordner, "a1"), false); err != nil {
 		t.Fatal(err)
 	}
 	// Neuer Schlüssel für das Dashboard ersetzt den alten.
-	if err := lege("dashboard", "a", datei, filepath.Join(ordner, "d2")); err != nil {
+	if err := lege("dashboard", "a", datei, filepath.Join(ordner, "d2"), false); err != nil {
 		t.Fatal(err)
 	}
 	// Eine vorhandene Schlüsseldatei wird nie überschrieben.
-	if err := lege("ablauf", "a", datei, filepath.Join(ordner, "d2")); err == nil {
+	if err := lege("ablauf", "a", datei, filepath.Join(ordner, "d2"), false); err == nil {
 		t.Fatal("vorhandene datei überschrieben")
 	}
 	l, err := dienste.Lade(datei)

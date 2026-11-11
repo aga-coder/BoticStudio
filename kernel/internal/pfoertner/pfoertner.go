@@ -11,6 +11,7 @@ package pfoertner
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,6 +30,10 @@ type Einstellungen struct {
 	MaxSchritte int
 	// Sperren gelten für alle Firmen.
 	Sperren []Sperre
+	// FreigabeWartezeit: So lange kann ein Mensch einen wartenden Schritt entscheiden.
+	FreigabeWartezeit time.Duration
+	// FreigabeGueltigkeit: So lange nach der Bestätigung darf der Schritt laufen.
+	FreigabeGueltigkeit time.Duration
 	// Uhr liefert die aktuelle Zeit. Leer heißt: Systemzeit.
 	Uhr func() time.Time
 }
@@ -36,8 +41,10 @@ type Einstellungen struct {
 // StandardEinstellungen sind die Werte für den Start.
 func StandardEinstellungen() Einstellungen {
 	return Einstellungen{
-		MaxSchritte: 1000,
-		Sperren:     []Sperre{{Markierung: "art9_verdacht", Region: RegionAusserhalbEU}},
+		MaxSchritte:         1000,
+		Sperren:             []Sperre{{Markierung: "art9_verdacht", Region: RegionAusserhalbEU}},
+		FreigabeWartezeit:   7 * 24 * time.Hour,
+		FreigabeGueltigkeit: 24 * time.Hour,
 	}
 }
 
@@ -52,6 +59,13 @@ type Pfoertner struct {
 func Neu(einst Einstellungen, k *katalog.Katalog, s Speicher) *Pfoertner {
 	if einst.Uhr == nil {
 		einst.Uhr = time.Now
+	}
+	std := StandardEinstellungen()
+	if einst.FreigabeWartezeit <= 0 {
+		einst.FreigabeWartezeit = std.FreigabeWartezeit
+	}
+	if einst.FreigabeGueltigkeit <= 0 {
+		einst.FreigabeGueltigkeit = std.FreigabeGueltigkeit
 	}
 	return &Pfoertner{einst: einst, katalog: k, speicher: s}
 }
@@ -261,6 +275,9 @@ func (p *Pfoertner) Pruefe(ctx context.Context, a Anfrage) Entscheidung {
 		if a.Ziel != nil {
 			inhalt["ziel"] = a.Ziel.Art + "/" + a.Ziel.Adresse
 		}
+		if ent.FreigabeID != "" {
+			inhalt["freigabe"] = ent.FreigabeID
+		}
 		e, err := v.Schreibe("pruefung", inhalt)
 		if err != nil {
 			return errAudit
@@ -366,20 +383,9 @@ func (p *Pfoertner) entscheide(v Vorgang, a *Anfrage) (Entscheidung, func() erro
 		}
 	}
 
-	// 6. Muss ein Mensch bestätigen?
-	if z.WirktNachAussen || z.Risiko == beipackzettel.RisikoHoch {
-		ent := Entscheidung{Ergebnis: Wartet, Grund: "Das wirkt nach außen oder ist riskant. Eine leitende Person muss bestätigen."}
-		if erl != nil {
-			ent.ErlaubnisID = erl.ID
-		}
-		return ent, nil, nil
-	}
-
-	ent := Entscheidung{Ergebnis: Erlaubt, Grund: "Erlaubt."}
-	if erl != nil {
-		ent.ErlaubnisID = erl.ID
-	}
-	return ent, func() error {
+	// zaehle hält fest, dass der Schritt läuft: Schrittzahl, Version und
+	// eine einmalige Erlaubnis.
+	zaehle := func() error {
 		auf.Schritte++
 		if auf.Versionen == nil {
 			auf.Versionen = map[string]string{}
@@ -393,7 +399,166 @@ func (p *Pfoertner) entscheide(v Vorgang, a *Anfrage) (Entscheidung, func() erro
 			return v.SpeichereErlaubnis(*erl)
 		}
 		return nil
-	}, nil
+	}
+	mit := func(ent Entscheidung) Entscheidung {
+		if erl != nil {
+			ent.ErlaubnisID = erl.ID
+		}
+		return ent
+	}
+
+	// 6. Muss ein Mensch bestätigen?
+	if z.WirktNachAussen || z.Risiko == beipackzettel.RisikoHoch {
+		const wartet = "Das wirkt nach außen oder ist riskant. Eine leitende Person muss bestätigen."
+		if a.Daten == nil {
+			// Ohne die echten Eingaben ist unbekannt, was bestätigt würde.
+			// Eine Freigabe entsteht erst beim Ausführen.
+			return mit(Entscheidung{Ergebnis: Wartet, Grund: wartet}), nil, nil
+		}
+		schritt, err := schrittAbdruck(*a)
+		if err != nil {
+			return Entscheidung{}, nil, err
+		}
+		frei, da, err := v.FreigabeZuSchritt(a.Aufgabe, schritt)
+		if err != nil {
+			return Entscheidung{}, nil, err
+		}
+		jetzt := p.jetzt()
+		gilt := da && jetzt.Before(frei.GueltigBis)
+		switch {
+		case da && frei.Stand == FreigabeAbgelehnt:
+			ent, _, _ := nein("Eine leitende Person hat diesen Schritt abgelehnt.")
+			ent.FreigabeID = frei.ID
+			return ent, nil, nil
+		case gilt && frei.Stand == FreigabeBestaetigt:
+			// Genau dieser Schritt mit genau diesen Daten, einmal.
+			ent := mit(Entscheidung{Ergebnis: Erlaubt, Grund: "Erlaubt, von einer leitenden Person bestätigt.", FreigabeID: frei.ID})
+			return ent, func() error {
+				frei.Stand = FreigabeVerbraucht
+				if err := v.SpeichereFreigabe(frei); err != nil {
+					return err
+				}
+				return zaehle()
+			}, nil
+		case gilt && frei.Stand == FreigabeOffen:
+			return mit(Entscheidung{Ergebnis: Wartet, Grund: wartet, FreigabeID: frei.ID}), nil, nil
+		}
+		// Noch keine Freigabe, oder die alte ist abgelaufen oder verbraucht: neu anfragen.
+		id, err := neueFreigabeID()
+		if err != nil {
+			return Entscheidung{}, nil, err
+		}
+		neu := Freigabe{
+			ID: id, Firma: a.Firma, Aufgabe: a.Aufgabe, Person: a.Person, Faehigkeit: z.Name, Version: z.Version,
+			Bereich: a.Bereich, Schritt: schritt, Daten: a.Daten, Stand: FreigabeOffen,
+			AngefragtAm: jetzt, GueltigBis: jetzt.Add(p.einst.FreigabeWartezeit),
+		}
+		if a.Ziel != nil {
+			neu.Ziel = a.Ziel.Art + "/" + a.Ziel.Adresse
+		}
+		return mit(Entscheidung{Ergebnis: Wartet, Grund: wartet, FreigabeID: id}), func() error {
+			return v.SpeichereFreigabe(neu)
+		}, nil
+	}
+
+	return mit(Entscheidung{Ergebnis: Erlaubt, Grund: "Erlaubt."}), zaehle, nil
+}
+
+// schrittAbdruck kennzeichnet einen Schritt: wer, in welcher Aufgabe, welche
+// Fähigkeit, wo, wohin und mit genau welchen Daten.
+func schrittAbdruck(a Anfrage) (string, error) {
+	ziel := ""
+	if a.Ziel != nil {
+		ziel = a.Ziel.Art + "/" + a.Ziel.Adresse
+	}
+	return Fingerabdruck(struct {
+		Aufgabe, Person, Faehigkeit, Version, Bereich, Ziel string
+		Daten                                               map[string]string
+	}{a.Aufgabe, a.Person, a.Faehigkeit, a.Version, a.Bereich, ziel, a.Daten})
+}
+
+func neueFreigabeID() (string, error) {
+	roh := make([]byte, 16)
+	if _, err := rand.Read(roh); err != nil {
+		return "", err
+	}
+	return "f-" + hex.EncodeToString(roh), nil
+}
+
+// ErrFreigabe heißt: Die Freigabe konnte nicht entschieden werden. Der Grund
+// steht im Text und enthält keine Daten.
+var ErrFreigabe = errors.New("freigabe nicht möglich")
+
+// EntscheideFreigabe bestätigt eine wartende Freigabe oder lehnt sie ab.
+// Das darf nur ein Mensch mit leitender Rolle in derselben Firma, nie die
+// KI (Grundregel 1). Eine Entscheidung gilt und lässt sich nicht ändern.
+func (p *Pfoertner) EntscheideFreigabe(ctx context.Context, firma, freigabeID, personID string, bestaetigt bool) (Freigabe, error) {
+	var frei Freigabe
+	err := p.speicher.Vorgang(ctx, firma, func(v Vorgang) error {
+		pe, ok, err := v.Person(personID)
+		if err != nil {
+			return err
+		}
+		if !ok || !pe.Rolle.DarfFreigeben() {
+			return fmt.Errorf("%w: nur leitende personen der firma entscheiden", ErrFreigabe)
+		}
+		var da bool
+		frei, da, err = v.Freigabe(freigabeID)
+		if err != nil {
+			return err
+		}
+		if !da {
+			return fmt.Errorf("%w: unbekannt", ErrFreigabe)
+		}
+		if frei.Stand != FreigabeOffen {
+			return fmt.Errorf("%w: schon entschieden", ErrFreigabe)
+		}
+		jetzt := p.jetzt()
+		if !jetzt.Before(frei.GueltigBis) {
+			return fmt.Errorf("%w: abgelaufen", ErrFreigabe)
+		}
+		art := "freigabe_abgelehnt"
+		frei.Stand = FreigabeAbgelehnt
+		if bestaetigt {
+			art, frei.Stand = "freigabe_bestaetigt", FreigabeBestaetigt
+			frei.GueltigBis = jetzt.Add(p.einst.FreigabeGueltigkeit)
+		}
+		frei.EntschiedenVon, frei.EntschiedenAm = personID, jetzt
+		if err := v.SpeichereFreigabe(frei); err != nil {
+			return err
+		}
+		return schreibe(v, art, map[string]string{
+			"freigabe": frei.ID, "aufgabe": frei.Aufgabe, "faehigkeit": frei.Faehigkeit + "@" + frei.Version,
+			"bereich": frei.Bereich, "ziel": frei.Ziel, "schritt": frei.Schritt,
+			"angefragt_fuer": frei.Person, "von": personID,
+		})
+	})
+	return frei, err
+}
+
+// OffeneFreigaben liefert, was in einer Firma auf einen Menschen wartet.
+// Abgelaufene sind nicht dabei.
+func (p *Pfoertner) OffeneFreigaben(ctx context.Context, firma, personID string) ([]Freigabe, error) {
+	var liste []Freigabe
+	err := p.speicher.Vorgang(ctx, firma, func(v Vorgang) error {
+		if _, ok, err := v.Person(personID); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("%w: person gehört nicht zu dieser firma", ErrFreigabe)
+		}
+		alle, err := v.OffeneFreigaben()
+		if err != nil {
+			return err
+		}
+		jetzt := p.jetzt()
+		for _, f := range alle {
+			if jetzt.Before(f.GueltigBis) {
+				liste = append(liste, f)
+			}
+		}
+		return nil
+	})
+	return liste, err
 }
 
 // uebernimmVorpruefung verlangt für jede Eingabe, die laut Beipackzettel

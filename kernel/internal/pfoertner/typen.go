@@ -115,4 +115,43 @@ type Entscheidung struct {
 	Grund       string   `json:"grund"`
 	ErlaubnisID string   `json:"erlaubnis_id,omitempty"`
 	AuditNr     int      `json:"audit_nr,omitempty"`
+	// FreigabeID nennt bei "wartet" die Freigabe, die ein Mensch entscheiden
+	// muss, und bei "erlaubt" die Freigabe, die dafür verbraucht wurde.
+	FreigabeID string `json:"freigabe_id,omitempty"`
+}
+
+// Stand einer Freigabe.
+type FreigabeStand string
+
+const (
+	FreigabeOffen      FreigabeStand = "offen"
+	FreigabeBestaetigt FreigabeStand = "bestaetigt"
+	FreigabeAbgelehnt  FreigabeStand = "abgelehnt"
+	FreigabeVerbraucht FreigabeStand = "verbraucht"
+)
+
+// Freigabe ist die Bestätigung eines Menschen für genau einen Schritt.
+//
+// Sie gilt für eine Aufgabe, eine Fähigkeit, einen Bereich, ein Ziel und
+// genau die Daten, die beim Anfragen vorlagen (Schritt ist der Fingerabdruck
+// über all das). Ändert sich eines davon, passt die Freigabe nicht mehr.
+// Gespeichert werden nur Fingerabdrücke, nie die Daten selbst.
+type Freigabe struct {
+	ID         string `json:"id"`
+	Firma      string `json:"firma"`
+	Aufgabe    string `json:"aufgabe"`
+	Person     string `json:"person"` // in wessen Auftrag der Schritt angefragt wurde
+	Faehigkeit string `json:"faehigkeit"`
+	Version    string `json:"version"`
+	Bereich    string `json:"bereich,omitempty"`
+	Ziel       string `json:"ziel,omitempty"` // "art/adresse"
+	Schritt    string `json:"schritt"`
+	// Daten: Eingabe -> Fingerabdruck. Damit kann die Oberfläche prüfen, dass
+	// sie dem Menschen genau das zeigt, was später ausgeführt wird.
+	Daten          map[string]string `json:"daten,omitempty"`
+	Stand          FreigabeStand     `json:"stand"`
+	AngefragtAm    time.Time         `json:"angefragt_am"`
+	GueltigBis     time.Time         `json:"gueltig_bis"`
+	EntschiedenVon string            `json:"entschieden_von,omitempty"`
+	EntschiedenAm  time.Time         `json:"entschieden_am,omitempty"`
 }

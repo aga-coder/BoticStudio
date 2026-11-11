@@ -77,7 +77,7 @@ func zaehle(t *testing.T, tx pgx.Tx, tabelle string) int {
 	return n
 }
 
-var tabellen = []string{"kern.firmen", "kern.personen", "kern.erlaubnisse", "kern.aufgaben", "kern.vorpruefungen", "audit.ketten", "audit.eintraege"}
+var tabellen = []string{"kern.firmen", "kern.personen", "kern.erlaubnisse", "kern.aufgaben", "kern.vorpruefungen", "kern.freigaben", "audit.ketten", "audit.eintraege"}
 
 // Eine Abfrage ganz ohne Firmenfilter sieht nur die eigene Firma, ohne
 // gesetzte Firma gar nichts. Das gilt für den Pförtner und, wegen FORCE,
@@ -149,6 +149,7 @@ func TestPfoertnerDarfNichtLoeschenUndAuditNichtAendern(t *testing.T) {
 	for _, sql := range []string{
 		`DELETE FROM kern.erlaubnisse`,
 		`DELETE FROM kern.personen`,
+		`DELETE FROM kern.freigaben`,
 		`DELETE FROM audit.eintraege`,
 		`UPDATE audit.eintraege SET art = 'gefälscht'`,
 		`TRUNCATE audit.eintraege`,

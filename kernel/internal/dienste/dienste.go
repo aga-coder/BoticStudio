@@ -30,6 +30,10 @@ type Eintrag struct {
 	Name             string   `json:"name"`
 	SchluesselSHA256 string   `json:"schluessel_sha256"`
 	Firmen           []string `json:"firmen"`
+	// DarfFreigeben: Der Dienst darf Entscheidungen von Menschen über
+	// wartende Schritte weitergeben. Nur für Dienste, die Menschen selbst
+	// anmelden (Dashboard), nie für den Orchestrator.
+	DarfFreigeben bool `json:"darf_freigeben,omitempty"`
 }
 
 // Datei ist der Inhalt der Datei mit den Diensten.
@@ -39,9 +43,13 @@ type Datei struct {
 
 // Dienst ist ein angemeldeter Dienst.
 type Dienst struct {
-	Name   string
-	firmen []string
+	Name          string
+	firmen        []string
+	darfFreigeben bool
 }
+
+// DarfFreigeben sagt, ob der Dienst Entscheidungen über Freigaben weitergeben darf.
+func (d Dienst) DarfFreigeben() bool { return d.darfFreigeben }
 
 // Darf sagt, ob der Dienst für diese Firma anfragen darf.
 func (d Dienst) Darf(firma string) bool {
@@ -98,7 +106,7 @@ func Neu(d Datei) (*Liste, error) {
 			return nil, fmt.Errorf("dienst %q: firmen fehlen", e.Name)
 		}
 		namen[e.Name], hashes[e.SchluesselSHA256] = true, true
-		l.alle = append(l.alle, bekannt{Dienst{e.Name, slices.Clone(e.Firmen)}, h})
+		l.alle = append(l.alle, bekannt{Dienst{e.Name, slices.Clone(e.Firmen), e.DarfFreigeben}, h})
 	}
 	return l, nil
 }

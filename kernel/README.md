@@ -15,7 +15,7 @@ Der Pförtner prüft jeden Schritt, den der Orchestrator ausführen möchte, und
 3. Steht die Fähigkeit in dieser Version im Katalog? Bleibt die Aufgabe bei ihrer Version?
 4. Gibt es eine gültige Erlaubnis für genau diesen Bereich (Teil für Teil verglichen)?
 5. Verlassen Daten BoticStudio: Ist ein Ziel genannt (Pflicht bei Datenausgang)? Sind die Daten vorgeprüft (siehe unten)? Erlaubt der Zettel das Ziel, steht es auf der Liste der Firma, liegt eine Einwilligung vor, und sperrt eine Markierung (z. B. `art9_verdacht`) die Region?
-6. Wirkt es nach außen oder ist es riskant: dann **wartet**.
+6. Wirkt es nach außen oder ist es riskant: dann **wartet**, bis ein Mensch bestätigt (siehe „Freigabe durch einen Menschen“).
 
 Jede Entscheidung geht an den Auditor (nur anhängen, Hash-Kette je Firma). Kann er nicht schreiben, wird abgelehnt. Entscheidung, Audit-Eintrag und Folgen (z. B. eine einmalige Erlaubnis gilt als verbraucht) werden gemeinsam gespeichert oder gar nicht.
 
@@ -29,6 +29,27 @@ Der Pförtner kennt keine einzelne Prüfung, nur zwei Felder im Beipackzettel:
 Die Fingerabdrücke bildet nur die Ausführung aus den echten Eingaben. Eine reine Prüfanfrage (`/v1/pruefen`) kann eine Vorprüfung darum nicht belegen und wird abgelehnt. Prüfergebnisse gelten nur in der eigenen Firma (eigene Tabelle mit RLS, nur anhängen).
 
 Für den ersten Ablauf heißt das: „Besondere Daten prüfen“ läuft in der EU zuerst. Findet sie etwas (`art9_verdacht`), geht die Mail nicht an das Modell außerhalb der EU.
+
+## Freigabe durch einen Menschen
+
+Der Pförtner kennt auch hier keine einzelne Fähigkeit. Er liest nur `wirkt_nach_aussen` und `risiko` aus dem Beipackzettel.
+
+- Sagt er beim Ausführen **wartet**, legt er eine **Freigabe** an und nennt ihre Nummer (`freigabe_id`). Sie gehört zu genau einem Schritt: Aufgabe, Person, Fähigkeit, Version, Bereich, Ziel und die Fingerabdrücke aller Eingaben. Gespeichert werden nur Fingerabdrücke, nie die Daten.
+- Eine Person mit der Rolle Admin oder Leitend aus derselben Firma bestätigt oder lehnt ab. Die Entscheidung steht und lässt sich nicht ändern.
+- Nach der Bestätigung läuft **genau dieser Schritt mit genau diesen Daten einmal**. Ein anderer Text, ein anderer Bereich, eine andere Aufgabe oder eine andere Person passt nicht und wartet neu. Danach ist die Freigabe verbraucht.
+- Fristen: Eine offene Freigabe kann 7 Tage lang entschieden werden, eine Bestätigung gilt 24 Stunden.
+- Die Bestätigung ersetzt keine andere Prüfung. Beim Ausführen läuft die ganze Reihe 1 bis 5 noch einmal: Ist die Erlaubnis inzwischen widerrufen oder die Aufgabe gestoppt, bleibt es bei abgelehnt.
+- Anfragen, Bestätigen, Ablehnen und Verbrauchen stehen im Audit, jeweils mit der Nummer der Freigabe.
+- Eine reine Prüfanfrage (`/v1/pruefen`) legt keine Freigabe an, weil sie die echten Eingaben nicht kennt.
+
+Über HTTP:
+
+- `POST /v1/freigaben/offen` (`{"firma", "person"}`): was in der Firma auf einen Menschen wartet.
+- `POST /v1/freigaben/entscheiden` (`{"firma", "freigabe", "person", "bestaetigt"}`).
+
+Beide Wege nimmt der Pförtner nur von einem Dienst an, bei dem in der Datei der Dienste `"darf_freigeben": true` steht (`go run ./cmd/dienstschluessel ... -freigeben`). Das ist für das Dashboard gedacht, das Menschen selbst anmeldet. Der Orchestrator bekommt das Recht nicht: Mit seinem Schlüssel kann er eine Freigabe weder sehen noch entscheiden, also auch keine Zustimmung vortäuschen.
+
+Grenze: Der Pförtner glaubt dem Dashboard, welche Person angemeldet ist, wie bei allen anderen Anfragen. Ob die Person leitend ist, prüft er selbst. Dieselbe Person darf einen Schritt anfragen und bestätigen, sonst könnte eine Firma mit nur einer leitenden Person nichts freigeben.
 
 ## Wer anfragen darf
 
@@ -119,4 +140,5 @@ curl -X POST localhost:8470/v1/pruefen -H "Authorization: Bearer $(cat /ausserha
 - Der echte Tresor (STACKIT Secrets Manager). Bis dahin kommen Zugangsdaten aus einer lokalen Datei.
 - Verschlüsselte Verbindung (HTTPS) zwischen Diensten und Pförtner, kommt mit dem Hosting. Bis dahin hört der Pförtner nur auf `127.0.0.1`. Erlaubnisse vergeben geht bewusst nicht über HTTP.
 - Der Name des Dienstes steht im Log, noch nicht im Audit.
-- Wartende Schritte speichern und bestätigen (kommt mit Schritt 2, Antwort senden).
+- Eine Oberfläche für Freigaben (kommt ins Dashboard) und eine Fähigkeit, die wirklich nach außen wirkt. Bisher ist die Freigabe nur mit Test-Fähigkeiten belegt.
+- Vier-Augen-Freigabe (zwei verschiedene Personen) für besonders riskante Schritte.

@@ -27,15 +27,16 @@ func main() {
 	firmen := flag.String("firmen", "", "Firmen, für die der Dienst anfragen darf, mit Komma getrennt")
 	dienstdatei := flag.String("dienste", "", "Datei mit den Diensten (wird angelegt, wenn es sie nicht gibt)")
 	ausgabe := flag.String("ausgabe", "", "neue Datei für den Schlüssel")
+	freigeben := flag.Bool("freigeben", false, "der Dienst darf Freigaben von Menschen weitergeben (nur für das Dashboard)")
 	flag.Parse()
-	if err := lege(*name, *firmen, *dienstdatei, *ausgabe); err != nil {
+	if err := lege(*name, *firmen, *dienstdatei, *ausgabe, *freigeben); err != nil {
 		fmt.Fprintln(os.Stderr, "dienstschluessel:", err)
 		os.Exit(1)
 	}
 	fmt.Printf("Schlüssel für %q gespeichert in %s. Pförtner neu starten.\n", *name, *ausgabe)
 }
 
-func lege(name, firmenListe, dienstdatei, ausgabe string) error {
+func lege(name, firmenListe, dienstdatei, ausgabe string, freigeben bool) error {
 	if name == "" || firmenListe == "" || dienstdatei == "" || ausgabe == "" {
 		return errors.New("-name, -firmen, -dienste und -ausgabe sind nötig")
 	}
@@ -53,7 +54,7 @@ func lege(name, firmenListe, dienstdatei, ausgabe string) error {
 	if err != nil {
 		return err
 	}
-	eintrag := dienste.Eintrag{Name: name, SchluesselSHA256: hash, Firmen: strings.Split(firmenListe, ",")}
+	eintrag := dienste.Eintrag{Name: name, SchluesselSHA256: hash, Firmen: strings.Split(firmenListe, ","), DarfFreigeben: freigeben}
 	neu := []dienste.Eintrag{eintrag}
 	for _, e := range d.Dienste {
 		if e.Name != name {
