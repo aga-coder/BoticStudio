@@ -18,9 +18,10 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import asdict
 
-from .einordnen import Einstellungen, ordne_postfach_ein
+from .ablaeufe import MAIL_EINORDNEN, eingabe_aus, mail_einordnen
+from .einordnen import Einstellungen
+from .orchestrator import Orchestrator
 from .pfoertner import HttpPfoertner, PfoertnerFehler
 from .speicher import ListenSpeicher, PostgresSpeicher
 
@@ -40,15 +41,16 @@ def main() -> int:
     dsn = os.environ.get("BOTICSTUDIO_ARBEITSDATEN")
     speicher = PostgresSpeicher(dsn) if dsn else ListenSpeicher()
     try:
-        bericht = ordne_postfach_ein(HttpPfoertner.aus_umgebung(), speicher, einst)
+        orchestrator = Orchestrator({MAIL_EINORDNEN: mail_einordnen(HttpPfoertner.aus_umgebung(), speicher)})
+        bericht = orchestrator.starte(MAIL_EINORDNEN, einst.firma, einst.person, eingabe_aus(einst)).ergebnis
     except PfoertnerFehler as f:
         print(json.dumps({"abbruch": str(f)}, ensure_ascii=False))
         return 1
     finally:
         if isinstance(speicher, PostgresSpeicher):
             speicher.schliesse()
-    print(json.dumps(asdict(bericht), ensure_ascii=False, indent=2))
-    return 0 if not bericht.abbruch else 1
+    print(json.dumps(bericht, ensure_ascii=False, indent=2))
+    return 0 if not bericht.get("abbruch") else 1
 
 
 if __name__ == "__main__":
